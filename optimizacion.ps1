@@ -121,6 +121,50 @@ function Clear-AMDCache {
     }
 }
 
+# === FILTRAR GPUs DEDICADAS ===
+function Is-DedicatedGPU {
+    param([string]$gpuName)
+    
+    $iGPUPatterns = @(
+        "Intel HD Graphics",
+        "Intel UHD Graphics", 
+        "Iris Xe Graphics",
+        "Iris Plus Graphics",
+        "Radeon Vega",
+        "Radeon HD",
+        "Radeon.*Graphics",  # Captura "AMD Radeon(TM) Graphics"
+        "Graphics"
+    )
+    
+    $dedicatedPatterns = @(
+        "RX",         # AMD dedicadas
+        "RTX",        # NVIDIA
+        "GTX",        # NVIDIA  
+        "Radeon VII", # AMD dedicada
+        "Radeon Pro"  # Workstation
+    )
+    
+    # Convertir a minúsculas para comparación case-insensitive
+    $gpuNameLower = $gpuName.ToLower()
+    
+    # Si coincide con algún patrón de dedicada → TRUE
+    foreach ($pattern in $dedicatedPatterns) {
+        if ($gpuNameLower -match $pattern.ToLower()) {
+            return $true
+        }
+    }
+    
+    # Si coincide con algún patrón de iGPU → FALSE
+    foreach ($pattern in $iGPUPatterns) {
+        if ($gpuNameLower -match $pattern.ToLower()) {
+            return $false
+        }
+    }
+    
+    # Por defecto, asumir que es dedicada
+    return $true
+}
+
 # === GENERAR Y LEER XML DE GPU-Z (SIN ACENTOS) ===
 function Update-GPUZInfo {
     try {
@@ -196,8 +240,17 @@ function Update-GPUZInfo {
 		# === LEER XML ===
 		[xml]$xml = Get-Content $xmlPath -Raw
 		$cards = $xml.gpuz_dump.card
-		$script:gpuzInfo = @()
+
+		# FILTRAR SOLO GPUs DEDICADAS
+		$dedicatedCards = @()
 		foreach ($card in $cards) {
+			if (Is-DedicatedGPU -gpuName $card.cardname) {
+				$dedicatedCards += $card
+			}
+		}
+
+		$script:gpuzInfo = @()
+		foreach ($card in $dedicatedCards) {
 			$name = $card.cardname.Trim()
 			
 			# Línea 1: Nombre de la GPU
@@ -293,17 +346,22 @@ function Update-GPUZInfo {
 			$script:gpuzInfo = $script:gpuzInfo[0..($script:gpuzInfo.Count-2)]
 		}
 		
-	# === CONSEJO REBAR (CORREGIDO) ===
-	$script:rebarAdvice = $null
-	$rebarOff = $script:gpuzInfo | Where-Object { $_.Line -match "ReBAR: Desactivado" }
-	if ($rebarOff) {
-		if ($script:motherboard -and $script:motherboard -ne "Desconocido" -and $script:motherboard -ne "No disponible") {
-			$search = ($script:motherboard -replace " ", "+") -replace "[^a-zA-Z0-9+]", ""
-			$script:rebarAdvice = "Para activar Resizable Bar busca en Google -> $search enable Resizable Bar site:youtube.com"
-		} else {
-			$script:rebarAdvice = "Para activar Resizable Bar busca en Google -> enable Resizable Bar site:youtube.com"
+		# === CONSEJO REBAR (MEJORADO) ===
+		$script:rebarAdvice = $null
+		$rebarOff = $script:gpuzInfo | Where-Object { $_.Line -match "ReBAR: Desactivado" }
+		if ($rebarOff) {
+			if ($script:motherboard -and $script:motherboard -ne "Desconocido" -and $script:motherboard -ne "No disponible") {
+				# Limpiar el nombre: quitar contenido entre paréntesis y espacios extra
+				$cleanName = $script:motherboard -replace '\s*\([^)]*\)', ''  # Quitar (MS-7c56)
+				$cleanName = $cleanName.Trim()  # Quitar espacios sobrantes
+				# Para búsqueda Google: reemplazar espacios por +
+				$search = $cleanName -replace " ", "+"
+				# Mostrar nombre limpio en el mensaje
+				$script:rebarAdvice = "Para activar Resizable Bar busca en Google -> $cleanName enable Resizable Bar site:youtube.com"
+			} else {
+				$script:rebarAdvice = "Para activar Resizable Bar busca en Google -> enable Resizable Bar site:youtube.com"
+			}
 		}
-	}
 
         Write-Host "GPU-Z: Informacion leida correctamente." -ForegroundColor Green
     }
@@ -414,12 +472,17 @@ function Update-CPUZInfo {
         $xmpStatus = if ($maxXMP -gt 0 -and [math]::Abs($effectiveSpeed - $maxXMP) -le 80) { "Activado"; "Green" } else { "Desactivado"; "Red" }
         if ($maxXMP -eq 0) { $xmpStatus = "Sin XMP"; "Yellow" }
 
-        # === CONSEJO XMP ===
-        $script:xmpAdvice = $null
-        if ($xmpStatus.Split(';')[0] -eq "Desactivado" -and $maxXMP -gt 0 -and $motherboardModel -ne "Desconocido") {
-            $search = ($motherboardModel -replace " ", "+") -replace "[^a-zA-Z0-9+]", ""
-            $script:xmpAdvice = "Para activar XMP busca en Google -> $search enable XMP site:youtube.com"
-        }
+		# === CONSEJO XMP (MEJORADO) ===
+		$script:xmpAdvice = $null
+		if ($xmpStatus.Split(';')[0] -eq "Desactivado" -and $maxXMP -gt 0 -and $motherboardModel -ne "Desconocido") {
+			# Limpiar el nombre: quitar contenido entre paréntesis y espacios extra
+			$cleanName = $motherboardModel -replace '\s*\([^)]*\)', ''  # Quitar (MS-7c56)
+			$cleanName = $cleanName.Trim()  # Quitar espacios sobrantes
+			# Para búsqueda Google: reemplazar espacios por +
+			$search = $cleanName -replace " ", "+"
+			# Mostrar nombre limpio en el mensaje
+			$script:xmpAdvice = "Para activar XMP busca en Google -> $cleanName enable XMP site:youtube.com"
+		}
 
         $line = "RAM | XMP-$maxXMP | Actual: $currentSpeed MHz (x2 = $effectiveSpeed) -> $($xmpStatus.Split(';')[0])"
         $script:cpuzInfo = [PSCustomObject]@{ Line = $line; Color = $xmpStatus.Split(';')[1] }
