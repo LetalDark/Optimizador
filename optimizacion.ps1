@@ -293,22 +293,24 @@ function Update-GPUZInfo {
 			$script:gpuzInfo = $script:gpuzInfo[0..($script:gpuzInfo.Count-2)]
 		}
 		
-		# === CONSEJO REBAR (MEJORADO) ===
-		$script:rebarAdvice = $null
-		$rebarOff = $script:gpuzInfo | Where-Object { $_.Line -match "ReBAR: Desactivado" }
-		if ($rebarOff) {
-			if ($script:motherboard -and $script:motherboard -ne "Desconocido" -and $script:motherboard -ne "No disponible") {
-				# Limpiar el nombre: quitar contenido entre paréntesis y espacios extra
-				$cleanName = $script:motherboard -replace '\s*\([^)]*\)', ''  # Quitar (MS-7c56)
-				$cleanName = $cleanName.Trim()  # Quitar espacios sobrantes
-				# Para búsqueda Google: reemplazar espacios por +
-				$search = $cleanName -replace " ", "+"
-				# Mostrar nombre limpio en el mensaje
-				$script:rebarAdvice = "Para activar Resizable Bar busca en Google -> $cleanName enable Resizable Bar site:youtube.com"
-			} else {
-				$script:rebarAdvice = "Para activar Resizable Bar busca en Google -> enable Resizable Bar site:youtube.com"
-			}
+	# === CONSEJO REBAR (CORREGIDO) ===
+	$script:rebarAdvice = $null
+	$rebarOff = $script:gpuzInfo | Where-Object { $_.Line -match "ReBAR: Desactivado" }
+	if ($rebarOff) {
+		if ($script:motherboard -and $script:motherboard -ne "Desconocido" -and $script:motherboard -ne "No disponible") {
+			$search = ($script:motherboard -replace " ", "+") -replace "[^a-zA-Z0-9+]", ""
+			$script:rebarAdvice = "Para activar Resizable Bar busca en Google -> $search enable Resizable Bar site:youtube.com"
+		} else {
+			$script:rebarAdvice = "Para activar Resizable Bar busca en Google -> enable Resizable Bar site:youtube.com"
 		}
+	}
+
+        Write-Host "GPU-Z: Informacion leida correctamente." -ForegroundColor Green
+    }
+    catch {
+        $script:gpuzInfo = "Error GPU-Z: $($_.Exception.Message)"
+        Write-Host "ERROR GPU-Z: $($_.Exception.Message)" -ForegroundColor Red
+    }
 }
 
 # === GENERAR Y LEER TXT DE CPU-Z (XMP + RAM + PLACA BASE) ===
@@ -412,17 +414,22 @@ function Update-CPUZInfo {
         $xmpStatus = if ($maxXMP -gt 0 -and [math]::Abs($effectiveSpeed - $maxXMP) -le 80) { "Activado"; "Green" } else { "Desactivado"; "Red" }
         if ($maxXMP -eq 0) { $xmpStatus = "Sin XMP"; "Yellow" }
 
-	# === CONSEJO XMP (MEJORADO) ===
-	$script:xmpAdvice = $null
-	if ($xmpStatus.Split(';')[0] -eq "Desactivado" -and $maxXMP -gt 0 -and $motherboardModel -ne "Desconocido") {
-		# Limpiar el nombre: quitar contenido entre paréntesis y espacios extra
-		$cleanName = $motherboardModel -replace '\s*\([^)]*\)', ''  # Quitar (MS-7c56)
-		$cleanName = $cleanName.Trim()  # Quitar espacios sobrantes
-		# Para búsqueda Google: reemplazar espacios por +
-		$search = $cleanName -replace " ", "+"
-		# Mostrar nombre limpio en el mensaje
-		$script:xmpAdvice = "Para activar XMP busca en Google -> $cleanName enable XMP site:youtube.com"
-	}
+        # === CONSEJO XMP ===
+        $script:xmpAdvice = $null
+        if ($xmpStatus.Split(';')[0] -eq "Desactivado" -and $maxXMP -gt 0 -and $motherboardModel -ne "Desconocido") {
+            $search = ($motherboardModel -replace " ", "+") -replace "[^a-zA-Z0-9+]", ""
+            $script:xmpAdvice = "Para activar XMP busca en Google -> $search enable XMP site:youtube.com"
+        }
+
+        $line = "RAM | XMP-$maxXMP | Actual: $currentSpeed MHz (x2 = $effectiveSpeed) -> $($xmpStatus.Split(';')[0])"
+        $script:cpuzInfo = [PSCustomObject]@{ Line = $line; Color = $xmpStatus.Split(';')[1] }
+		
+        Write-Host "CPU-Z: Informacion leida correctamente." -ForegroundColor Green
+    } catch {
+        $script:cpuzInfo = "Error CPU-Z"
+        $script:motherboard = "No disponible"
+        $script:xmpAdvice = $null
+    }
 }
 
 # === GESTIONAR MODO MAXIMO RENDIMIENTO ===
