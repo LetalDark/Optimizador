@@ -133,6 +133,8 @@ function Is-DedicatedGPU {
         "Radeon Vega",
         "Radeon HD",
         "Radeon.*Graphics",  # Captura "AMD Radeon(TM) Graphics"
+        "Qualcomm.*Adreno",  # ← NUEVO: Captura Qualcomm Adreno
+        "Adreno.*GPU",       # ← NUEVO: Captura "Adreno(TM) X1-85 GPU"  
         "Graphics"
     )
     
