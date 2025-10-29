@@ -1,5 +1,5 @@
-# registro_optimizacion.ps1
-# Optimizador + GPU-Z (ReBAR + PCIe Link) + Solo AMD RX
+# optimizacion.ps1
+# Optimizador
 # Ejecutar como ADMINISTRADOR
 
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -904,3 +904,4 @@ do {
         }
     }
 } while ($opcion.ToUpper() -ne "S")
+
