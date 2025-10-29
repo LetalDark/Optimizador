@@ -121,50 +121,50 @@ function Clear-AMDCache {
     }
 }
 
-# === FILTRAR GPUs DEDICADAS ===
-function Is-DedicatedGPU {
+# === DETECTAR TIPO DE GPU ===
+function Get-GPUType {
     param([string]$gpuName)
     
     $iGPUPatterns = @(
-        "Intel HD Graphics",
-        "Intel UHD Graphics", 
-        "Iris Xe Graphics",
-        "Iris Plus Graphics",
-        "Radeon Vega",
-        "Radeon HD",
-        "Radeon.*Graphics",  # Captura "AMD Radeon(TM) Graphics"
-        "Qualcomm.*Adreno",  # ← NUEVO: Captura Qualcomm Adreno
-        "Adreno.*GPU",       # ← NUEVO: Captura "Adreno(TM) X1-85 GPU"  
-        "Graphics"
+        @{Pattern="Intel HD Graphics"; Type="iGPU"},
+        @{Pattern="Intel UHD Graphics"; Type="iGPU"}, 
+        @{Pattern="Iris Xe Graphics"; Type="iGPU"},
+        @{Pattern="Iris Plus Graphics"; Type="iGPU"},
+        @{Pattern="Radeon Vega"; Type="iGPU"},
+        @{Pattern="Radeon HD"; Type="iGPU"},
+        @{Pattern="Radeon.*Graphics"; Type="iGPU"},
+        @{Pattern="Qualcomm.*Adreno"; Type="iGPU"},
+        @{Pattern="Adreno.*GPU"; Type="iGPU"},
+        @{Pattern="Graphics"; Type="iGPU"}
     )
     
     $dedicatedPatterns = @(
-        "RX",         # AMD dedicadas
-        "RTX",        # NVIDIA
-        "GTX",        # NVIDIA  
-        "Radeon VII", # AMD dedicada
-        "Radeon Pro"  # Workstation
+        @{Pattern="RX"; Type="dGPU"},
+        @{Pattern="RTX"; Type="dGPU"},
+        @{Pattern="GTX"; Type="dGPU"},  
+        @{Pattern="Radeon VII"; Type="dGPU"},
+        @{Pattern="Radeon Pro"; Type="dGPU"}
     )
     
     # Convertir a minúsculas para comparación case-insensitive
     $gpuNameLower = $gpuName.ToLower()
     
-    # Si coincide con algún patrón de dedicada → TRUE
+    # Si coincide con algún patrón de dedicada → dGPU
     foreach ($pattern in $dedicatedPatterns) {
-        if ($gpuNameLower -match $pattern.ToLower()) {
-            return $true
+        if ($gpuNameLower -match $pattern.Pattern.ToLower()) {
+            return @{Type="dGPU"; DisplayName=$gpuName; ShowDetails=$true}
         }
     }
     
-    # Si coincide con algún patrón de iGPU → FALSE
+    # Si coincide con algún patrón de iGPU → iGPU
     foreach ($pattern in $iGPUPatterns) {
-        if ($gpuNameLower -match $pattern.ToLower()) {
-            return $false
+        if ($gpuNameLower -match $pattern.Pattern.ToLower()) {
+            return @{Type="iGPU"; DisplayName="$gpuName (Integrada)"; ShowDetails=$false}
         }
     }
     
     # Por defecto, asumir que es dedicada
-    return $true
+    return @{Type="dGPU"; DisplayName=$gpuName; ShowDetails=$true}
 }
 
 # === GENERAR Y LEER XML DE GPU-Z (SIN ACENTOS) ===
@@ -243,97 +243,106 @@ function Update-GPUZInfo {
 		[xml]$xml = Get-Content $xmlPath -Raw
 		$cards = $xml.gpuz_dump.card
 
-		# FILTRAR SOLO GPUs DEDICADAS
-		$dedicatedCards = @()
+		# CLASIFICAR TODAS LAS GPUs
+		$filteredCards = @()
 		foreach ($card in $cards) {
-			if (Is-DedicatedGPU -gpuName $card.cardname) {
-				$dedicatedCards += $card
+			$gpuType = Get-GPUType -gpuName $card.cardname
+			$filteredCards += [PSCustomObject]@{
+				Card = $card
+				Type = $gpuType.Type
+				DisplayName = $gpuType.DisplayName
+				ShowDetails = $gpuType.ShowDetails
 			}
 		}
 
 		$script:gpuzInfo = @()
-		foreach ($card in $dedicatedCards) {
-			$name = $card.cardname.Trim()
+		foreach ($filteredCard in $filteredCards) {
+			$card = $filteredCard.Card
+			$name = $filteredCard.DisplayName
 			
 			# Línea 1: Nombre de la GPU
+			$nameColor = if ($filteredCard.Type -eq "iGPU") { "Yellow" } else { "White" }
 			$script:gpuzInfo += [PSCustomObject]@{
 				Line = $name
-				Color = "White"
+				Color = $nameColor
 			}
 			
-			# Línea 2: Estado ReBAR
-			$rebar = if ($card.resizablebar -eq "Enabled") { "Activado" } else { "Desactivado" }
-			$rebarColor = if ($card.resizablebar -eq "Enabled") { "Green" } else { "Red" }
-			$script:gpuzInfo += [PSCustomObject]@{
-				Line = "ReBAR: $rebar"
-				Color = $rebarColor
-			}
-			
-			# Línea 3: Conexión PCIe
-			$maxMatch = [regex]::Match($card.businterface, "x(\d+)\s+([\d\.]+)")
-			$recWidth = if ($maxMatch.Success) { "x$($maxMatch.Groups[1].Value)" } else { "x?" }
-			$recGenRaw = if ($maxMatch.Success) { [double]$maxMatch.Groups[2].Value } else { 0 }
-			$recGen = if ($recGenRaw -gt 0) { "Gen$([math]::Floor($recGenRaw))" } else { "Gen?" }
-			
-			$curMatch = [regex]::Match($card.businterface, "@\s*x(\d+)\s+([\d\.]+)")
-			$curWidth = if ($curMatch.Success) { "x$($curMatch.Groups[1].Value)" } else { "x?" }
-			$curGenRaw = if ($curMatch.Success) { [double]$maxMatch.Groups[2].Value } else { 0 }
-			$curGen = if ($curGenRaw -gt 0) { "Gen$([math]::Floor($curGenRaw))" } else { "Gen?" }
-			
-			if (-not $curMatch.Success -and $card.pcie_current -match "Gen\s*([\d\.]+)") {
-				$curGen = "Gen$([math]::Floor([double]$matches[1]))"
-			}
-			
-			$optima = "PCIe $recWidth $recGen"
-			$actual = "PCIe $curWidth $curGen"
-			
-			# Verificar si la conexión es correcta para múltiples GPUs
-			$currentWidth = ($curWidth -replace 'x','' -as [int])
-			$optimalWidth = ($recWidth -replace 'x','' -as [int])
-			$currentGen = $curGenRaw
-			$optimalGen = $recGenRaw
+			# Solo mostrar ReBAR y PCIe para GPUs dedicadas
+			if ($filteredCard.ShowDetails) {
+				# Línea 2: Estado ReBAR
+				$rebar = if ($card.resizablebar -eq "Enabled") { "Activado" } else { "Desactivado" }
+				$rebarColor = if ($card.resizablebar -eq "Enabled") { "Green" } else { "Red" }
+				$script:gpuzInfo += [PSCustomObject]@{
+					Line = "ReBAR: $rebar"
+					Color = $rebarColor
+				}
+				
+				# Línea 3: Conexión PCIe
+				$maxMatch = [regex]::Match($card.businterface, "x(\d+)\s+([\d\.]+)")
+				$recWidth = if ($maxMatch.Success) { "x$($maxMatch.Groups[1].Value)" } else { "x?" }
+				$recGenRaw = if ($maxMatch.Success) { [double]$maxMatch.Groups[2].Value } else { 0 }
+				$recGen = if ($recGenRaw -gt 0) { "Gen$([math]::Floor($recGenRaw))" } else { "Gen?" }
+				
+				$curMatch = [regex]::Match($card.businterface, "@\s*x(\d+)\s+([\d\.]+)")
+				$curWidth = if ($curMatch.Success) { "x$($curMatch.Groups[1].Value)" } else { "x?" }
+				$curGenRaw = if ($curMatch.Success) { [double]$maxMatch.Groups[2].Value } else { 0 }
+				$curGen = if ($curGenRaw -gt 0) { "Gen$([math]::Floor($curGenRaw))" } else { "Gen?" }
+				
+				if (-not $curMatch.Success -and $card.pcie_current -match "Gen\s*([\d\.]+)") {
+					$curGen = "Gen$([math]::Floor([double]$matches[1]))"
+				}
+				
+				$optima = "PCIe $recWidth $recGen"
+				$actual = "PCIe $curWidth $curGen"
+				
+				# Verificar si la conexión es correcta para múltiples GPUs
+				$currentWidth = ($curWidth -replace 'x','' -as [int])
+				$optimalWidth = ($recWidth -replace 'x','' -as [int])
+				$currentGen = $curGenRaw
+				$optimalGen = $recGenRaw
 
-			# Si hay múltiples GPUs, x8 es normal cuando la óptima es x16
-			$totalCards = $cards.Count
-			$isMultiGPU = $totalCards -gt 1
+				# Si hay múltiples GPUs, x8 es normal cuando la óptima es x16
+				$totalCards = $cards.Count
+				$isMultiGPU = $totalCards -gt 1
 
-			# Calcular ancho de banda relativo (considerando generación)
-			$genMultipliers = @{"1.0"=1; "2.0"=2; "3.0"=4; "4.0"=8; "5.0"=16}
-			$currentMultiplier = if ($genMultipliers.ContainsKey("$currentGen")) { $genMultipliers["$currentGen"] } else { 1 }
-			$optimalMultiplier = if ($genMultipliers.ContainsKey("$optimalGen")) { $genMultipliers["$optimalGen"] } else { 1 }
+				# Calcular ancho de banda relativo (considerando generación)
+				$genMultipliers = @{"1.0"=1; "2.0"=2; "3.0"=4; "4.0"=8; "5.0"=16}
+				$currentMultiplier = if ($genMultipliers.ContainsKey("$currentGen")) { $genMultipliers["$currentGen"] } else { 1 }
+				$optimalMultiplier = if ($genMultipliers.ContainsKey("$optimalGen")) { $genMultipliers["$optimalGen"] } else { 1 }
 
-			$currentBandwidth = $currentWidth * $currentMultiplier
-			$optimalBandwidth = $optimalWidth * $optimalMultiplier
+				$currentBandwidth = $currentWidth * $currentMultiplier
+				$optimalBandwidth = $optimalWidth * $optimalMultiplier
 
-			$widthOK = $currentWidth -eq $optimalWidth
-			$genOK = $currentGen -eq $optimalGen
-			$bandwidthOK = $currentBandwidth -ge ($optimalBandwidth * 0.5)  # Al menos 50% del ancho de banda óptimo
+				$widthOK = $currentWidth -eq $optimalWidth
+				$genOK = $currentGen -eq $optimalGen
+				$bandwidthOK = $currentBandwidth -ge ($optimalBandwidth * 0.5)  # Al menos 50% del ancho de banda óptimo
 
-			if ($isMultiGPU -and $optimalWidth -eq 16 -and $currentWidth -eq 8 -and $genOK) {
-				# Caso: Múltiples GPUs, misma generación, x8 cada una → Normal (Verde)
-				$pcieColor = "Green"
-			} elseif ($isMultiGPU -and $optimalWidth -eq 16 -and $currentWidth -eq 8 -and $currentGen -ge $optimalGen) {
-				# Caso: Múltiples GPUs, generación igual o mejor, x8 cada una → Normal (Verde)
-				$pcieColor = "Green"
-			} elseif ($widthOK -and $genOK) {
-				# Caso: Conexión idéntica a la óptima (Verde)
-				$pcieColor = "Green"
-			} elseif ($bandwidthOK -and $currentGen -ge $optimalGen) {
-				# Caso: Ancho de banda suficiente y generación igual o mejor (Verde)
-				$pcieColor = "Green"
-			} else {
-				# Caso: Conexión inferior (Rojo)
-				$pcieColor = "Red"
-			}
+				if ($isMultiGPU -and $optimalWidth -eq 16 -and $currentWidth -eq 8 -and $genOK) {
+					# Caso: Múltiples GPUs, misma generación, x8 cada una → Normal (Verde)
+					$pcieColor = "Green"
+				} elseif ($isMultiGPU -and $optimalWidth -eq 16 -and $currentWidth -eq 8 -and $currentGen -ge $optimalGen) {
+					# Caso: Múltiples GPUs, generación igual o mejor, x8 cada una → Normal (Verde)
+					$pcieColor = "Green"
+				} elseif ($widthOK -and $genOK) {
+					# Caso: Conexión idéntica a la óptima (Verde)
+					$pcieColor = "Green"
+				} elseif ($bandwidthOK -and $currentGen -ge $optimalGen) {
+					# Caso: Ancho de banda suficiente y generación igual o mejor (Verde)
+					$pcieColor = "Green"
+				} else {
+					# Caso: Conexión inferior (Rojo)
+					$pcieColor = "Red"
+				}
 
-			# Añadir información de generación al texto si es relevante
-			if (-not $genOK) {
-				$actual += " [Gen$currentGen vs Gen$optimalGen]"
-			}
+				# Añadir información de generación al texto si es relevante
+				if (-not $genOK) {
+					$actual += " [Gen$currentGen vs Gen$optimalGen]"
+				}
 
-			$script:gpuzInfo += [PSCustomObject]@{
-				Line = "Conexion actual: $actual - Conexion optima: $optima"
-				Color = $pcieColor
+				$script:gpuzInfo += [PSCustomObject]@{
+					Line = "Conexion actual: $actual - Conexion optima: $optima"
+					Color = $pcieColor
+				}
 			}
 			
 			# Línea vacía entre GPUs
