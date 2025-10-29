@@ -15,20 +15,3 @@ powershell -Command "try { $progressPreference = 'silentlyContinue'; iwr -Uri 'h
 REM Ejecutar en misma ventana desde la ruta correcta
 cd /d "%BAT_DIR%"
 powershell -ExecutionPolicy Bypass -File "optimizacion.ps1"
-
-REM Si llegamos aquí, el script de PowerShell terminó
-if %errorlevel% neq 0 (
-    echo.
-    echo ========================================
-    echo           ADVERTENCIA
-    echo ========================================
-    echo.
-    echo El script no se ejecuto como Administrador
-    echo Muchas optimizaciones requieren permisos de admin
-    echo.
-    echo Solucion: Ejecutar este .bat como Administrador
-    echo.
-    echo - Boton derecho en el archivo
-    echo - Ejecutar como administrador
-    echo.
-)
