@@ -561,11 +561,11 @@ function Set-MaximoRendimiento {
     }
 }
 
-# === NUEVO: TEST FRECUENCIA RATON ===
+# === TEST FRECUENCIA RATON ===
 function Test-MousePollingRate {
     Write-Host "`nIniciando test de frecuencia de raton..." -ForegroundColor Yellow
-    Write-Host "Mueve el raton DENTRO de la ventana durante 5 segundos" -ForegroundColor Cyan
-    Write-Host "IMPORTANTE: NO saques el raton de la ventana!" -ForegroundColor Red
+    Write-Host "Mueve el raton en CIRCULOS rapidos durante 8 segundos" -ForegroundColor Cyan
+    Write-Host "IMPORTANTE: Movimientos rapidos y constantes!" -ForegroundColor Red
     
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
@@ -573,18 +573,18 @@ function Test-MousePollingRate {
     $times = New-Object System.Collections.Generic.List[double]
     
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = "TEST RATON - Mueve el raton AQUI durante 5 segundos"
-    $form.Width = 600
-    $form.Height = 400
+    $form.Text = "TEST RATON - Mueve en CIRCULOS RAPIDOS 8 segundos"
+    $form.Width = 800
+    $form.Height = 600
     $form.BackColor = [System.Drawing.Color]::LightBlue
     $form.FormBorderStyle = "FixedDialog"
     $form.StartPosition = "CenterScreen"
     
     $label = New-Object System.Windows.Forms.Label
-    $label.Text = "MUEVELO CONSTANTE 5 SEGUNDOS`nFrecuencia: Calculando..."
-    $label.Size = New-Object System.Drawing.Size(580, 100)
+    $label.Text = "MOVIMIENTOS RAPIDOS EN CIRCULOS`n8 SEGUNDOS`nFrecuencia: Calculando..."
+    $label.Size = New-Object System.Drawing.Size(580, 120)
     $label.Location = New-Object System.Drawing.Point(10, 10)
-    $label.Font = New-Object System.Drawing.Font("Arial", 16, [System.Drawing.FontStyle]::Bold)
+    $label.Font = New-Object System.Drawing.Font("Arial", 14, [System.Drawing.FontStyle]::Bold)
     $label.ForeColor = [System.Drawing.Color]::DarkBlue
     $label.TextAlign = [System.Drawing.ContentAlignment]::MiddleCenter
     $form.Controls.Add($label)
@@ -595,7 +595,7 @@ function Test-MousePollingRate {
     })
     
     $timer = New-Object System.Windows.Forms.Timer
-    $timer.Interval = 5000 # 5 segundos
+    $timer.Interval = 8000 # 8 segundos
     $timer.Add_Tick({
         $timer.Stop()
         $form.Close()
@@ -604,18 +604,34 @@ function Test-MousePollingRate {
     $form.Add_Shown({ $timer.Start() })
     [void]$form.ShowDialog()
     
-    $avg = ($times | Where-Object { $_ -gt 0 } | Measure-Object -Average).Average
-    if ($avg -gt 0) {
+    # Filtrar outliers y calcular mejor
+    $validTimes = $times | Where-Object { $_ -gt 0 -and $_ -lt 20 } # Eliminar valores extremos
+    if ($validTimes.Count -gt 10) {
+        $avg = ($validTimes | Measure-Object -Average).Average
         $rate = [Math]::Round(1000 / $avg, 0)
-        $script:mouseHz = $rate
+        
+        # Suavizado: tomar percentil 75 para evitar picos bajos
+        $sortedTimes = $validTimes | Sort-Object
+        $percentile75 = $sortedTimes[[Math]::Floor($sortedTimes.Count * 0.25)]
+        $rateSmoothed = [Math]::Round(1000 / $percentile75, 0)
+        
+        $script:mouseHz = $rateSmoothed
         $script:mouseTested = $true
-        Write-Host "Frecuencia de sondeo: $rate Hz" -ForegroundColor Green
+        
+        Write-Host "Frecuencia de sondeo: $rateSmoothed Hz" -ForegroundColor Green
         Write-Host "Intervalo promedio: $([Math]::Round($avg, 2)) ms" -ForegroundColor DarkGray
+        Write-Host "Muestras validas: $($validTimes.Count)" -ForegroundColor DarkGray
+        
+        # Diagnóstico
+        if ($rateSmoothed -lt 450) {
+            Write-Host "`nCONSEJO: Cierra apps en segundo plano y repite el test" -ForegroundColor Yellow
+        }
+        
         return $true
     } else {
         $script:mouseHz = $null
         $script:mouseTested = $false
-        Write-Host "ERROR: No se detectaron movimientos. Repite el test." -ForegroundColor Red
+        Write-Host "ERROR: Pocos movimientos detectados. Repite con movimientos mas rapidos." -ForegroundColor Red
         return $false
     }
 }
