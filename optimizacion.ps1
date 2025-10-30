@@ -341,6 +341,13 @@ function Update-GPUZInfo {
         Log-Progress "# Ejecutando GPU-Z..." Cyan -Subsection
         if (Test-Path $xmlPath) { Remove-Item $xmlPath -Force }
         $process = Start-Process -FilePath $gpuzPath -ArgumentList "-dump `"$xmlPath`"" -PassThru -WindowStyle Hidden
+		if ($process) {
+			$null = $process.WaitForExit(15000)
+			if (-not $process.HasExited) {
+				$process.Kill()
+				$process.WaitForExit()
+			}
+		}
         Log-Progress "# GENERANDO GPUZ.XML" Yellow -Subsection
         if (-not $process.WaitForExit(15000)) {
             $process.Kill()
@@ -884,18 +891,20 @@ function Show-LoadingProcess {
     Write-Host "# INICIANDO OPTIMIZADOR DE RENDIMIENTO" -ForegroundColor White
     Write-Host "# ===================================================================`n" -ForegroundColor Cyan
 
-    if ($script:gpuzInfo -and $script:gpuzInfo.Count -gt 0) {
-        Write-Host "# GPUs DETECTADAS (GPU-Z)" -ForegroundColor Green
-        Write-Host "# -------------------------------------------------------------------" -ForegroundColor Green
-        foreach ($info in $script:gpuzInfo) {
-            $line = $info.Line.Trim()
-            if ($line -eq "" -or $line -match "ReBAR:" -or $line -match "Conexion actual:") { continue }
-            if ($line -match "^(AMD|NVIDIA|Intel|GeForce|Radeon|Arc)") {
-                Write-Host "# $line" -ForegroundColor White
-            }
-        }
-        Write-Host "# -------------------------------------------------------------------`n" -ForegroundColor Green
-    }
+	if ($script:gpuzInfo -and $script:gpuzInfo.Count -gt 0 -and $script:gpuzInfo[0].Line) {
+		Write-Host "# GPUs DETECTADAS (GPU-Z)" -ForegroundColor Green
+		Write-Host "# -------------------------------------------------------------------" -ForegroundColor Green
+		foreach ($info in $script:gpuzInfo) {
+			if ($info.Line -and $info.Line.Trim() -ne "" -and $info.Line -notmatch "ReBAR:|Conexion actual:") {
+				if ($info.Line -match "^(AMD|NVIDIA|Intel|GeForce|Radeon|Arc)") {
+					Write-Host "# $($info.Line.Trim())" -ForegroundColor White
+				}
+			}
+		}
+		Write-Host "# -------------------------------------------------------------------`n" -ForegroundColor Green
+	} else {
+		Write-Host "# GPU-Z: No se pudo leer informacion" -ForegroundColor Red
+	}
 
     Write-Host "# CARGA COMPLETADA" -ForegroundColor Cyan
     Write-Host "# ===================================================================`n" -ForegroundColor Cyan
@@ -906,6 +915,23 @@ function Show-LoadingProcess {
 Clear-Host
 Update-CPUZInfo
 Update-GPUZInfo
+
+# === ESPERAR A QUE GPU-Z TERMINE Y LIBERE EL ARCHIVO ===
+$maxWait = 30
+$waited = 0
+while ($waited -lt $maxWait) {
+    if (-not (Get-Process gpuz -ErrorAction SilentlyContinue) -and (Test-Path "$PSScriptRoot\gpuz.xml")) {
+        break
+    }
+    Start-Sleep -Seconds 1
+    $waited++
+}
+if ($waited -ge $maxWait) {
+    Write-Host "ADVERTENCIA: GPU-Z no termino. Forzando cierre..." -ForegroundColor Yellow
+    taskkill /F /IM gpuz.exe /T | Out-Null
+    Start-Sleep -Seconds 1
+}
+
 Show-LoadingProcess
 Clear-Host
 
