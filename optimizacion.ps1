@@ -758,8 +758,8 @@ function Show-Menu {
     Write-Host "$script:estado1" -NoNewline -ForegroundColor $color1
     Write-Host " (Recomendado $rec1)" -ForegroundColor Yellow
     Write-Host " DirectStorage es una tecnologia de Microsoft que mejora los tiempos de carga de los juegos al permitir que la tarjeta grafica acceda directamente a los datos del SSD / Puede causar inestabilidad o crasheos en Vulkan" -ForegroundColor Gray
-    Write-Host " Ruta: $reg1Path" -ForegroundColor DarkGray
-    Write-Host " Valor: $reg1Name = $script:valor1" -ForegroundColor DarkGray
+    #Write-Host " Ruta: $reg1Path" -ForegroundColor DarkGray
+    #Write-Host " Valor: $reg1Name = $script:valor1" -ForegroundColor DarkGray
     Write-Host ""
 
     # === 2. MPO ===
@@ -769,8 +769,8 @@ function Show-Menu {
     Write-Host "$script:estado2" -NoNewline -ForegroundColor $color2
     Write-Host " (Recomendado $rec2)" -ForegroundColor Yellow
     Write-Host " Multi-Plane Overlay, una caracteristica de renderizado grafico que busca optimizar el rendimiento. Desactivarlo evita parpadeos y stuttering / +Carga CPU" -ForegroundColor Gray
-    Write-Host " Ruta: $reg2Path" -ForegroundColor DarkGray
-    Write-Host " Valor: $reg2Name = $script:valor2" -ForegroundColor DarkGray
+    #Write-Host " Ruta: $reg2Path" -ForegroundColor DarkGray
+    #Write-Host " Valor: $reg2Name = $script:valor2" -ForegroundColor DarkGray
     Write-Host ""
 
     # === 3. Modo Energía (siempre visible) ===
@@ -806,8 +806,9 @@ function Show-Menu {
         Write-Host "$script:estado3" -NoNewline -ForegroundColor $color3
         Write-Host " (Recomendado $rec3)" -ForegroundColor Yellow
         Write-Host " Mejora FPS en juegos (solo AMD RX): pool de cache ilimitado. AMD Optimizado = mas micro-cortes" -ForegroundColor Gray
-        Write-Host " Ruta: $reg3Base" -ForegroundColor DarkGray
-        Write-Host " Valor: $reg3Name = $script:valor3" -ForegroundColor DarkGray
+		Write-Host " Posible stuttering al principio al tener que generarse Shaders nuevos" -ForegroundColor Gray
+        #Write-Host " Ruta: $reg3Base" -ForegroundColor DarkGray
+        #Write-Host " Valor: $reg3Name = $script:valor3" -ForegroundColor DarkGray
         Write-Host ""
     }
 
