@@ -11,6 +11,38 @@ if (-not $isAdmin) {
 
 $ErrorActionPreference = "Stop"
 
+# === AUTO-ACTUALIZAR .BAT ===
+function Update-BatchFile {
+    $batName = "Ejecutar_Optimizacion.bat"
+    $batPath = Join-Path $PSScriptRoot $batName
+    $url = "https://github.com/LetalDark/Optimizador/raw/refs/heads/main/$batName"
+
+    if (-not (Test-Path $batPath)) { return $false }
+
+    try {
+        Log-Progress "Actualizando $batName..." Yellow
+        $tempBat = "$batPath.tmp"
+        Invoke-WebRequest -Uri $url -OutFile $tempBat -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop
+
+        # Comparar contenido (solo si cambió)
+        $current = Get-Content $batPath -Raw -ErrorAction SilentlyContinue
+        $new = Get-Content $tempBat -Raw
+        if ($current -ne $new) {
+            Move-Item $tempBat $batPath -Force
+            Log-Progress "$batName actualizado" Green
+            return $true
+        } else {
+            Remove-Item $tempBat -Force
+            Log-Progress "$batName ya está actualizado" Gray
+            return $false
+        }
+    } catch {
+        Log-Progress "ERROR al actualizar .bat: $($_.Exception.Message)" Red
+        if (Test-Path "$batPath.tmp") { Remove-Item "$batPath.tmp" -Force }
+        return $false
+    }
+}
+
 # === INICIALIZAR ENTORNO (RUTAS + BACKUP) ===
 function RegistersBackup {
     # --- Rutas de registro ---
@@ -1265,6 +1297,7 @@ $script:mouseTested = $false
 # === INICIO ===
 Clear-Host
 RegistersBackup
+Update-BatchFile
 Update-CPUZInfo
 Update-GPUZInfo
 Show-LoadingProcess
