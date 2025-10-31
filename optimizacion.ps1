@@ -869,69 +869,125 @@ function Update-GPUZInfo {
     }
 }
 
-# === GESTIONAR MODO MAXIMO RENDIMIENTO ===
+# === GESTIONAR MODO MAXIMO RENDIMIENTO (CON LIMPIEZA DE DUPLICADOS) ===
 function Set-MaximoRendimiento {
-    Write-Host "`nProcesando Maximo rendimiento..." -ForegroundColor Yellow
+    Write-Host "`nProcesando plan de maximo rendimiento..." -ForegroundColor Yellow
 
-    # === LEER PLANES EN UTF-8 + LIMPIAR ACENTOS ===
-    $plans = ([System.Text.Encoding]::UTF8.GetString([System.Text.Encoding]::Default.GetBytes((powercfg -l | Out-String).Trim()))) -replace '[^\x00-\x7F]', 'a'
+    # === NOMBRES EN DIFERENTES IDIOMAS ===
+    $performanceNames = @(
+        "Maximo rendimiento",    # Español
+        "Ultimate Performance",  # Inglés
+        "Alto rendimiento",      # Español alternativo
+        "High performance",      # Inglés alternativo
+        "Rendimiento elevado"    # Español (México)
+    )
 
-    # Buscar línea con "Maximo rendimiento"
-    $maximoLine = $plans -split "`n" | Where-Object { $_ -match "Maximo rendimiento" } | Select-Object -First 1
-
-    if ($maximoLine) {
-        # Existe
-        if ($maximoLine -match '([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})') {
-            $guid = $matches[1]
-        } else {
-            Write-Host "Error: No se pudo extraer GUID." -ForegroundColor Red
-            return $false
+    # === OBTENER TODOS LOS PLANES ===
+    $plansRaw = powercfg -l | Out-String
+    $plans = ([System.Text.Encoding]::UTF8.GetString([System.Text.Encoding]::Default.GetBytes($plansRaw.Trim()))) -replace '[^\x00-\x7F]', 'a'
+    
+    # === DETECTAR Y LIMPIAR PLANES DUPLICADOS ===
+    $allPerformancePlans = @()
+    
+    foreach ($name in $performanceNames) {
+        $matchingPlans = $plans -split "`n" | Where-Object { $_ -match $name }
+        foreach ($planLine in $matchingPlans) {
+            if ($planLine -match '([a-f0-9-]{36})') {
+                $allPerformancePlans += [PSCustomObject]@{
+                    Guid = $matches[1]
+                    Name = $planLine.Trim()
+                    IsActive = $planLine -match '\*$'
+                }
+            }
         }
+    }
 
-        $isActive = $maximoLine -match '\*$'
+    # === LIMPIAR DUPLICADOS (MANTENER SOLO 1) ===
+    if ($allPerformancePlans.Count -gt 1) {
+        Write-Host "Encontrados $($allPerformancePlans.Count) planes de rendimiento. Limpiando duplicados..." -ForegroundColor Yellow
+        
+        # Ordenar: primero los activos, luego por nombre consistente
+        $sortedPlans = $allPerformancePlans | Sort-Object { $_.IsActive -eq $false }, Name
+        
+        # Mantener el PRIMER plan (más preferido)
+        $primaryPlan = $sortedPlans[0]
+        $plansToDelete = $sortedPlans[1..($sortedPlans.Count-1)]
+        
+        # Eliminar planes duplicados
+        foreach ($dupPlan in $plansToDelete) {
+            if ($dupPlan.Guid -ne $primaryPlan.Guid) {
+                powercfg -delete $dupPlan.Guid 2>$null
+                Write-Host "  Eliminado plan duplicado: $($dupPlan.Name)" -ForegroundColor DarkGray
+            }
+        }
+        
+        Write-Host "Mantenido plan: $($primaryPlan.Name)" -ForegroundColor Green
+        
+        # Usar el plan primario
+        if (-not $primaryPlan.IsActive) {
+            $result = powercfg /s $primaryPlan.Guid 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "Plan de maximo rendimiento activado." -ForegroundColor Green
+                return $true
+            }
+        } else {
+            Write-Host "Plan de maximo rendimiento ya está activo." -ForegroundColor Yellow
+            return $true
+        }
+    }
+    # === SI HAY EXACTAMENTE 1 PLAN ===
+    elseif ($allPerformancePlans.Count -eq 1) {
+        $primaryPlan = $allPerformancePlans[0]
+        Write-Host "Plan encontrado: $($primaryPlan.Name)" -ForegroundColor DarkGray
+        
+        if (-not $primaryPlan.IsActive) {
+            $result = powercfg /s $primaryPlan.Guid 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "Plan de maximo rendimiento activado." -ForegroundColor Green
+                return $true
+            }
+        } else {
+            Write-Host "Plan de maximo rendimiento ya está activo." -ForegroundColor Yellow
+            return $true
+        }
+    }
 
-        if ($isActive) {
-            Write-Host "Maximo rendimiento ya esta activo." -ForegroundColor Yellow
+    # === SI NO EXISTE NINGÚN PLAN → CREAR NUEVO ===
+    Write-Host "Creando nuevo plan de maximo rendimiento..." -ForegroundColor Yellow
+    
+    $result = powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Error al crear plan." -ForegroundColor Red
+        return $false
+    }
+
+    # Buscar el NUEVO plan creado
+    Start-Sleep -Milliseconds 500
+    $plansRaw = powercfg -l | Out-String
+    $plans = ([System.Text.Encoding]::UTF8.GetString([System.Text.Encoding]::Default.GetBytes($plansRaw.Trim()))) -replace '[^\x00-\x7F]', 'a'
+    
+    $newGuid = $null
+    foreach ($name in $performanceNames) {
+        $newPlanLine = $plans -split "`n" | Where-Object { $_ -match $name -and $_ -notmatch '\*' } | Select-Object -First 1
+        if ($newPlanLine -match '([a-f0-9-]{36})') {
+            $newGuid = $matches[1]
+            Write-Host "Nuevo plan creado: $name" -ForegroundColor Green
+            break
+        }
+    }
+
+    if ($newGuid) {
+        $result = powercfg /s $newGuid 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Plan de maximo rendimiento activado." -ForegroundColor Green
             return $true
         } else {
-            Write-Host "Activando plan existente: $guid" -ForegroundColor Yellow
-            $result = powercfg /s $guid
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "Maximo rendimiento activado." -ForegroundColor Green
-                return $true
-            } else {
-                Write-Host "Error al activar: $result" -ForegroundColor Red
-                return $false
-            }
+            Write-Host "Error al activar nuevo plan." -ForegroundColor Red
+            return $false
         }
     } else {
-        # No existe → crear
-        Write-Host "Creando nuevo plan..." -ForegroundColor Yellow
-        $result = powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "Error al crear plan." -ForegroundColor Red
-            return $false
-        }
-
-        # Recargar
-        $plans = ([System.Text.Encoding]::UTF8.GetString([System.Text.Encoding]::Default.GetBytes((powercfg -l | Out-String).Trim()))) -replace '[^\x00-\x7F]', 'a'
-        $maximoLine = $plans -split "`n" | Where-Object { $_ -match "Maximo rendimiento" -and $_ -notmatch '\*' } | Select-Object -Last 1
-
-        if ($maximoLine -match '([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})') {
-            $guid = $matches[1]
-            Write-Host "Plan creado: $guid" -ForegroundColor Green
-            $result = powercfg /s $guid
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "Maximo rendimiento activado." -ForegroundColor Green
-                return $true
-            } else {
-                Write-Host "Error al activar nuevo plan." -ForegroundColor Red
-                return $false
-            }
-        } else {
-            Write-Host "Error: No se pudo obtener GUID del nuevo plan." -ForegroundColor Red
-            return $false
-        }
+        Write-Host "Error: No se pudo obtener el nuevo plan." -ForegroundColor Red
+        return $false
     }
 }
 
@@ -1036,7 +1092,7 @@ function Update-Status {
 			}
 		}
 		
-	# === MODO ENERGÍA - DETECCIÓN FIABLE ===
+	# === MODO ENERGÍA - DETECCIÓN FIABLE (MULTI-IDIOMA) ===
 	$script:estado4 = "No existe"
 	$script:valor4 = "Maximo rendimiento"
 
@@ -1046,7 +1102,14 @@ function Update-Status {
 	$plansRaw = powercfg -l | Out-String
 	$plans = ([System.Text.Encoding]::UTF8.GetString([System.Text.Encoding]::Default.GetBytes($plansRaw.Trim()))) -replace '[^\x00-\x7F]', 'a'
 
-	$maximoLine = $plans -split "`n" | Where-Object { $_ -match "Maximo rendimiento" } | Select-Object -First 1
+	# Nombres en diferentes idiomas
+	$performanceNames = @("Maximo rendimiento", "Ultimate Performance", "Alto rendimiento", "High performance", "Rendimiento elevado")
+
+	$maximoLine = $null
+	foreach ($name in $performanceNames) {
+		$maximoLine = $plans -split "`n" | Where-Object { $_ -match $name } | Select-Object -First 1
+		if ($maximoLine) { break }
+	}
 
 	if ($maximoLine) {
 		$hasAsterisk = $maximoLine -match '\*$'
