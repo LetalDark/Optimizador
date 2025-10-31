@@ -280,7 +280,7 @@ function Update-CPUZInfo {
         $script:xmpAdvice = $null
         if ($xmpStatus.Split(';')[0] -eq "Desactivado" -and $maxXMP -gt 0 -and $motherboardModel -ne "Desconocido") {
             $cleanName = $motherboardModel -replace '\s*\([^)]*\)', '' -replace '\s+$', ''
-            $script:xmpAdvice = "Para activar XMP busca en Google -> $cleanName enable XMP site:youtube.com"
+            $script:xmpAdvice = "Mejoras de hasta un 20% en FPS. Para activar XMP busca en Google -> $cleanName enable XMP site:youtube.com"
         }
 
         $line = "RAM | XMP-$maxXMP | Actual: $currentSpeed MHz (x2 = $effectiveSpeed) -> $($xmpStatus.Split(';')[0])"
@@ -517,9 +517,9 @@ function Update-GPUZInfo {
         if ($rebarOff) {
             if ($script:motherboard -and $script:motherboard -ne "Desconocido" -and $script:motherboard -ne "No disponible") {
                 $cleanName = $script:motherboard -replace '\s*\([^)]*\)', '' -replace '\s+$', ''
-                $script:rebarAdvice = "Para activar Resizable Bar busca en Google -> $cleanName enable Resizable Bar site:youtube.com"
+                $script:rebarAdvice = "Mejoras de hasta un 15% en FPS. Para activar Resizable Bar busca en Google -> $cleanName enable Resizable Bar site:youtube.com"
             } else {
-                $script:rebarAdvice = "Para activar Resizable Bar busca en Google -> enable Resizable Bar site:youtube.com"
+                $script:rebarAdvice = "Mejoras de hasta un 15% en FPS. Para activar Resizable Bar busca en Google -> enable Resizable Bar site:youtube.com"
             }
         }
 
@@ -795,7 +795,7 @@ function Show-Menu {
 	Write-Host "4. Hz Mouse -> " -NoNewline -ForegroundColor White
 	Write-Host "$script:mouseEstado" -NoNewline -ForegroundColor $mouseColor
 	Write-Host " (Recomendado $recMouse)" -ForegroundColor Yellow
-	Write-Host " Para evitar problemas de stuttering en algunos juegos se recomiendan menos de 1000Hz" -ForegroundColor Gray
+	Write-Host " Para evitar problemas de stuttering en algunos juegos se recomiendan menos de 1000Hz. No confundir con DPI. Configuralo en la aplicacion de tu mouse." -ForegroundColor Gray
 	Write-Host ""
 
     # === 4. AMD Shader Cache (solo si hay AMD RX) ===
@@ -977,6 +977,7 @@ function Start-AutoMode {
 }
 
 # === PREGUNTA AL USUARIO ===
+Write-Host "`nAntes de empezar cierra cualquier juego y al finalizar reinicia el ordenador para aplicar los cambios" -ForegroundColor Yellow
 Write-Host "`nElige como ejecutar el script:" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "1. Automatico" -ForegroundColor White
