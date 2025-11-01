@@ -282,7 +282,7 @@ function Update-CPUZInfo {
 			foreach ($possibleFile in $possibleNames) {
 				if (Test-Path $possibleFile) {
 					if ($possibleFile -ne $txtPath) {
-						Log-Progress "# RENOMBRANDO: $possibleFile -> meminfo.txt" Yellow -Subsection
+						#Log-Progress "# RENOMBRANDO: $possibleFile -> meminfo.txt" Yellow -Subsection
 						try {
 							Rename-Item $possibleFile "meminfo.txt" -Force -ErrorAction Stop
 							$actualTxtPath = $txtPath
@@ -864,112 +864,105 @@ function Update-GPUZInfo {
     }
 }
 
-# === GESTIONAR MODO MAXIMO RENDIMIENTO (CON LIMPIEZA DE DUPLICADOS) ===
+# === GESTIONAR MODO MAXIMO RENDIMIENTO (CON LIMPIEZA DUPLICADOS) ===
 function Set-MaximoRendimiento {
-    Write-Host "Procesando plan de maximo rendimiento..." -ForegroundColor Yellow
-
-    # === NOMBRES EN DIFERENTES IDIOMAS ===
+    Write-Host "Procesando Maximo rendimiento..." -ForegroundColor Yellow
+    
     $performanceNames = @(
-        "Maximo rendimiento",    # Español
-        "Ultimate Performance",  # Inglés
-        "Alto rendimiento",      # Español alternativo
-        "High performance"       # Inglés alternativo
+        "Maximo rendimiento", "Ultimate Performance", 
+        "Alto rendimiento", "High performance", "Rendimiento elevado"
     )
-
-    # === OBTENER PLANES ACTUALES ===
-    $plansRaw = powercfg -l | Out-String
-    $plans = $plansRaw.Trim()
     
-    # === DETECTAR PLAN ACTIVO ACTUAL ===
-    $activePlanLine = $plans -split "`n" | Where-Object { $_ -match '\*' } | Select-Object -First 1
-    $activePlanGuid = $null
-    if ($activePlanLine -match '([a-f0-9-]{36})') {
-        $activePlanGuid = $matches[1]
+    # Obtener planes
+    $plans = Get-PowerPlans
+    if (-not $plans) {
+        Write-Host "ERROR: No se pudieron leer los planes." -ForegroundColor Red
+        return $false
     }
     
-    # === BUSCAR PLANES DE RENDIMIENTO EXISTENTES ===
-    $performancePlans = @()
+    # Detectar plan activo
+    $activeOutput = powercfg -getactivescheme | Out-String
+    $activeGuid = $null
+    if ($activeOutput -match '([a-f0-9-]{36})') { $activeGuid = $matches[1] }
     
-    foreach ($name in $performanceNames) {
-        # Buscar sin importar acentos
-        $cleanName = $name.ToLower() -replace '[áéíóú]', ''
-        
-        $matchingLines = $plans -split "`n" | Where-Object { 
-            $cleanLine = $_.ToLower() -replace '[áéíóú]', ''
-            $cleanLine -match [regex]::Escape($cleanName)
-        }
-        
-        foreach ($line in $matchingLines) {
-            if ($line -match '([a-f0-9-]{36})') {
-                $performancePlans += [PSCustomObject]@{
-                    Guid = $matches[1]
-                    Name = $line.Trim()
-                    IsActive = ($matches[1] -eq $activePlanGuid)
-                }
+    # Buscar plan principal
+    $targetPlan = $null
+    foreach ($plan in $plans) {
+        $cleanName = $plan.Name -replace '[^\x00-\x7F]', 'a'
+        foreach ($name in $performanceNames) {
+            $escapedName = [regex]::Escape($name) -replace '[^\x00-\x7F]', 'a'
+            if ($cleanName -match $escapedName) {
+                $targetPlan = $plan
+                break
             }
         }
+        if ($targetPlan) { break }
     }
-
-    # === ELIMINAR DUPLICADOS Y MANTENER SOLO UNO ===
-    $uniquePlans = $performancePlans | Sort-Object Guid -Unique
-
-    # === SI EXISTE ALGÚN PLAN DE RENDIMIENTO ===
-    if ($uniquePlans.Count -gt 0) {
-        $targetPlan = $uniquePlans[0]
-        Write-Host "Plan encontrado: $($targetPlan.Name)" -ForegroundColor Green
-        
-        # Activar si no está activo
-        if (-not $targetPlan.IsActive) {
-            $result = powercfg /s $targetPlan.Guid 2>$null
-            if ($LASTEXITCODE -eq 0) {
-                Write-Host "Plan de maximo rendimiento activado." -ForegroundColor Green
+    
+    # === LIMPIEZA DE DUPLICADOS (NUEVA FUNCIONALIDAD) ===
+    $duplicatePlans = $plans | Where-Object { 
+        $cleanDupName = $_.Name -replace '[^\x00-\x7F]', 'a'
+        foreach ($name in $performanceNames) {
+            $escapedDupName = [regex]::Escape($name) -replace '[^\x00-\x7F]', 'a'
+            if ($cleanDupName -match $escapedDupName -and $_.Guid -ne $targetPlan.Guid) {
                 return $true
-            } else {
-                Write-Host "Error al activar plan existente." -ForegroundColor Red
-                return $false
             }
-        } else {
-            Write-Host "Plan de maximo rendimiento ya esta activo." -ForegroundColor Yellow
+        }
+        $false
+    }
+    
+    $deletedCount = 0
+    foreach ($dup in $duplicatePlans) {
+        $result = powercfg -delete $dup.Guid 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Eliminado duplicado: $($dup.Name)" -ForegroundColor Cyan
+            $deletedCount++
+        }
+    }
+    if ($deletedCount -gt 0) {
+        Write-Host "Limpiados $deletedCount planes duplicados" -ForegroundColor Green
+        Start-Sleep -Seconds 2
+        $plans = Get-PowerPlans  # Recargar lista limpia
+    }
+    
+    # Activar plan principal (si existe)
+    if ($targetPlan -and $targetPlan.Guid -eq $activeGuid) {
+        Write-Host "Maximo rendimiento YA ACTIVO: $($targetPlan.Name)" -ForegroundColor Green
+        return $true
+    }
+    
+    if ($targetPlan) {
+        Write-Host "Activando: $($targetPlan.Name)" -ForegroundColor Yellow
+        $result = powercfg /s $targetPlan.Guid 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Maximo rendimiento ACTIVADO" -ForegroundColor Green
             return $true
         }
     }
-
-    # === SI NO EXISTE, INTENTAR CREAR ===
-    Write-Host "Creando nuevo plan de maximo rendimiento..." -ForegroundColor Yellow
     
-    # Intentar crear Ultimate Performance
+    # Crear nuevo
+    Write-Host "Creando nuevo plan..." -ForegroundColor Yellow
     $result = powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2>$null
-    
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "Plan creado exitosamente." -ForegroundColor Green
-        
-        # Buscar y activar el plan recién creado
-        Start-Sleep -Seconds 2
-        $newPlansRaw = powercfg -l | Out-String
-        
-        foreach ($name in $performanceNames) {
-            $cleanName = $name.ToLower() -replace '[áéíóú]', ''
-            
-            $matchingLine = $newPlansRaw -split "`n" | Where-Object { 
-                $cleanLine = $_.ToLower() -replace '[áéíóú]', ''
-                $cleanLine -match [regex]::Escape($cleanName)
-            } | Select-Object -First 1
-            
-            if ($matchingLine -and $matchingLine -match '([a-f0-9-]{36})') {
-                $result = powercfg /s $matches[1] 2>$null
-                if ($LASTEXITCODE -eq 0) {
-                    Write-Host "Plan de maximo rendimiento activado." -ForegroundColor Green
-                    return $true
-                }
-            }
-        }
-        
-        Write-Host "Plan creado pero no se pudo activar automaticamente." -ForegroundColor Yellow
-        return $false
-    } else {
-        Write-Host "No se pudo crear el plan (sistema puede no soportarlo)." -ForegroundColor Yellow
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "No se pudo crear (Windows no lo soporta)" -ForegroundColor Red
         return $false
     }
+    
+    Start-Sleep -Seconds 4
+    $plans = Get-PowerPlans
+    $newPlan = $plans | Where-Object { 
+        $n = $_.Name -replace '[^\x00-\x7F]', 'a'
+        $n -match "Ultimate|Maximo"
+    } | Select-Object -Last 1  # El más reciente
+    
+    if ($newPlan) {
+        $result = powercfg /s $newPlan.Guid 2>$null
+        Write-Host "Nuevo plan CREADO Y ACTIVADO: $($newPlan.Name)" -ForegroundColor Green
+        return $true
+    }
+    
+    Write-Host "Plan creado pero no activado automaticamente" -ForegroundColor Yellow
+    return $false
 }
 
 # === TEST FRECUENCIA RATON ===
@@ -1135,64 +1128,96 @@ function Update-Status {
     $value2 = Get-ItemProperty -Path $reg2Path -Name $reg2Name -ErrorAction SilentlyContinue
     if ($value2) { $script:valor2 = $value2.$reg2Name; if ($value2.$reg2Name -eq 5) { $script:estado2 = "Desactivado" } }
 
-	$script:estado3 = "AMD Optimizado"; $script:valor3 = "No existe"
-		$gpus = Get-AllAMDGPUs
-		if ($gpus.Count -gt 0) {
-			# --- CREAR UMD SI NO EXISTE (FIX CRÍTICO) ---
-			if (-not (Test-Path $gpus[0].UMD)) {
-				New-Item -Path $gpus[0].UMD -Force | Out-Null
-			}
-			$value3 = Get-ItemProperty -Path $gpus[0].UMD -Name $reg3Name -ErrorAction SilentlyContinue
-			if ($value3 -and $value3.$reg3Name) {
-				$script:valor3 = "{0:X2} 00" -f $value3.$reg3Name[0]
-				if ($value3.$reg3Name[0] -eq 0x32) { $script:estado3 = "Siempre Activado" }
-			}
-		}
-		
-	# === MODO ENERGÍA - DETECCIÓN FIABLE (MULTI-IDIOMA) ===
+    # === NUEVO: DETECCIÓN DE AMD RX CON GPU-Z ===
+    $hasAMDRX = $false
+    $amdGPUName = $null
+    if ($script:gpuzInfo) {
+        foreach ($info in $script:gpuzInfo) {
+            if ($info.Line -match "AMD Radeon RX [56789]") {
+                $hasAMDRX = $true
+                $amdGPUName = $info.Line
+                break
+            }
+        }
+    }
+
+    # === INTENTAR CON REGISTRO CLÁSICO ===
+    $gpus = Get-AllAMDGPUs
+    $script:estado3 = "No detectado"; $script:valor3 = "No existe"
+
+    if ($gpus.Count -gt 0) {
+        try {
+            if (-not (Test-Path $gpus[0].UMD)) { New-Item -Path $gpus[0].UMD -Force | Out-Null }
+            $value3 = Get-ItemProperty -Path $gpus[0].UMD -Name $reg3Name -ErrorAction SilentlyContinue
+            if ($value3 -and $value3.$reg3Name) {
+                $script:valor3 = "{0:X2} 00" -f $value3.$reg3Name[0]
+                if ($value3.$reg3Name[0] -eq 0x32) { $script:estado3 = "Siempre Activado" }
+                elseif ($value3.$reg3Name[0] -eq 0x31) { $script:estado3 = "AMD Optimizado" }
+                else { $script:estado3 = "Valor: $($script:valor3)" }
+            } else {
+                $script:estado3 = "AMD Optimizado"
+            }
+        } catch { $script:estado3 = "AMD Optimizado" }
+    }
+    # === FALLBACK: SI NO HAY REGISTRO, PERO GPU-Z VE AMD RX ===
+    elseif ($hasAMDRX) {
+        # Intentar buscar en TODAS las claves de display
+        $baseKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+        $subkeys = Get-ChildItem $baseKey -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match "^\d+$" }
+        foreach ($key in $subkeys) {
+            $driverDesc = Get-ItemProperty -Path $key.PSPath -Name "DriverDesc" -ErrorAction SilentlyContinue
+            if ($driverDesc -and $driverDesc.DriverDesc -match "AMD Radeon RX [56789]") {
+                $umdPath = "$($key.PSPath)\UMD"
+                if (-not (Test-Path $umdPath)) { New-Item -Path $umdPath -Force | Out-Null }
+                $value3 = Get-ItemProperty -Path $umdPath -Name $reg3Name -ErrorAction SilentlyContinue
+                if ($value3 -and $value3.$reg3Name) {
+                    $script:valor3 = "{0:X2} 00" -f $value3.$reg3Name[0]
+                    if ($value3.$reg3Name[0] -eq 0x32) { $script:estado3 = "Siempre Activado" }
+                    elseif ($value3.$reg3Name[0] -eq 0x31) { $script:estado3 = "AMD Optimizado" }
+                    else { $script:estado3 = "Valor: $($script:valor3)" }
+                } else {
+                    $script:estado3 = "AMD Optimizado"
+                }
+                $gpus = @([PSCustomObject]@{ UMD = $umdPath })
+                break
+            }
+        }
+    }
+
+	# === MODO ENERGÍA - DETECCIÓN FIABLE ===
 	$script:estado4 = "No existe"
 	$script:valor4 = "Maximo rendimiento"
 
-	# Ejecutar powercfg -l dos veces para forzar refresco
-	$null = powercfg -l | Out-Null
-	Start-Sleep -Milliseconds 300
-	$plansRaw = powercfg -l | Out-String
-	$plans = ([System.Text.Encoding]::UTF8.GetString([System.Text.Encoding]::Default.GetBytes($plansRaw.Trim()))) -replace '[^\x00-\x7F]', 'a'
+	$plans = Get-PowerPlans
+	$activeOutput = powercfg -getactivescheme | Out-String
+	$activeGuid = $null
+	if ($activeOutput -match '([a-f0-9-]{36})') { $activeGuid = $matches[1] }
 
-	# Nombres en diferentes idiomas
-	$performanceNames = @("Maximo rendimiento", "Ultimate Performance", "Alto rendimiento", "High performance", "Rendimiento elevado")
+	$performanceNames = @("Maximo rendimiento", "Ultimate Performance", "Alto rendimiento", "High performance")
 
-	$maximoLine = $null
-	foreach ($name in $performanceNames) {
-		$maximoLine = $plans -split "`n" | Where-Object { $_ -match $name } | Select-Object -First 1
-		if ($maximoLine) { break }
-	}
-
-	if ($maximoLine) {
-		$hasAsterisk = $maximoLine -match '\*$'
-		$guidMatch = [regex]::Match($maximoLine, '([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})')
-		if ($guidMatch.Success) {
-			$currentMatch = powercfg -getactivescheme | Select-String -Pattern '([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})'
-			$currentGuid = if ($currentMatch) { $currentMatch.Matches[0].Groups[1].Value } else { $null }
-			if ($currentGuid -eq $guidMatch.Groups[1].Value) {
-				$script:estado4 = "Activado"
-			} else {
-				$script:estado4 = "Desactivado (existe)"
+	$found = $false
+	foreach ($plan in $plans) {
+		$cleanName = $plan.Name -replace '[^\x00-\x7F]', 'a'
+		foreach ($name in $performanceNames) {
+			if ($cleanName -match ([regex]::Escape($name) -replace '[^\x00-\x7F]', 'a')) {
+				if ($plan.Guid -eq $activeGuid) {
+					$script:estado4 = "Activado"
+				} else {
+					$script:estado4 = "Desactivado (existe)"
+				}
+				$found = $true
+				break
 			}
-		} elseif ($hasAsterisk) {
-			$script:estado4 = "Activado"
-		} else {
-			$script:estado4 = "Desactivado (existe)"
 		}
+		if ($found) { break }
 	}
-	
-	# === NUEVO: MOUSE POLLING RATE ===
-	if ($script:mouseTested -and $script:mouseHz) {
-		$script:mouseEstado = "$($script:mouseHz)Hz"
-	} else {
-		$script:mouseEstado = "Test no realizado"
-	}	
 
+    # === MOUSE POLLING RATE ===
+    if ($script:mouseTested -and $script:mouseHz) {
+        $script:mouseEstado = "$($script:mouseHz)Hz"
+    } else {
+        $script:mouseEstado = "Test no realizado"
+    }
 }
 
 # === SISTEMA DE LOG VISUAL CENTRALIZADO (COMPATIBLE PS 5.1) ===
@@ -1226,9 +1251,9 @@ function Log-Progress {
 
 # === CARGA VISUAL LIMPIA (SOLO NOMBRES GPU) ===
 function Show-LoadingProcess {
-    Write-Host "`n# ===================================================================" -ForegroundColor Cyan
+    Write-Host "# ===================================================================" -ForegroundColor Cyan
     Write-Host "# INICIANDO OPTIMIZADOR DE RENDIMIENTO" -ForegroundColor White
-    Write-Host "# ===================================================================`n" -ForegroundColor Cyan
+    Write-Host "# ===================================================================" -ForegroundColor Cyan
 
 	if ($script:gpuzInfo -and $script:gpuzInfo.Count -gt 0 -and $script:gpuzInfo[0].Line) {
 		Write-Host "# GPUs DETECTADAS (GPU-Z)" -ForegroundColor Green
@@ -1240,7 +1265,7 @@ function Show-LoadingProcess {
 				}
 			}
 		}
-		Write-Host "# -------------------------------------------------------------------`n" -ForegroundColor Green
+		Write-Host "# -------------------------------------------------------------------" -ForegroundColor Green
 	} else {
 		Write-Host "# GPU-Z: No se pudo leer informacion" -ForegroundColor Red
 	}
@@ -1294,15 +1319,12 @@ function Start-AutoMode {
 # === MOSTRAR MENU (AMD ULTIMA, OPCIONAL) ===
 function Show-Menu {
     Update-Status
-    $gpus = Get-AllAMDGPUs
-    $hasAMD = $gpus.Count -gt 0
-
     Clear-Host
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host " OPTIMIZADOR " -ForegroundColor Yellow
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
-    
+   
     # === 1. DirectStorage ===
     $rec1 = "Activado"
     $color1 = if ($script:estado1 -eq $rec1) { "Green" } else { "Red" }
@@ -1310,10 +1332,7 @@ function Show-Menu {
     Write-Host "$script:estado1" -NoNewline -ForegroundColor $color1
     Write-Host " (Recomendado $rec1)" -ForegroundColor Yellow
     Write-Host " DirectStorage es una tecnologia de Microsoft que mejora los tiempos de carga de los juegos al permitir que la tarjeta grafica acceda directamente a los datos del SSD / Puede causar inestabilidad o crasheos en Vulkan" -ForegroundColor Gray
-    #Write-Host " Ruta: $reg1Path" -ForegroundColor DarkGray
-    #Write-Host " Valor: $reg1Name = $script:valor1" -ForegroundColor DarkGray
     Write-Host ""
-
     # === 2. MPO ===
     $rec2 = "Desactivado"
     $color2 = if ($script:estado2 -eq $rec2) { "Green" } else { "Red" }
@@ -1321,10 +1340,7 @@ function Show-Menu {
     Write-Host "$script:estado2" -NoNewline -ForegroundColor $color2
     Write-Host " (Recomendado $rec2)" -ForegroundColor Yellow
     Write-Host " Multi-Plane Overlay, una caracteristica de renderizado grafico que busca optimizar el rendimiento. Desactivarlo evita parpadeos y stuttering / +Carga CPU" -ForegroundColor Gray
-    #Write-Host " Ruta: $reg2Path" -ForegroundColor DarkGray
-    #Write-Host " Valor: $reg2Name = $script:valor2" -ForegroundColor DarkGray
     Write-Host ""
-
     # === 3. Modo Energía (siempre visible) ===
     $rec4 = "Activado"
     $color4 = if ($script:estado4 -eq "Activado") { "Green" } else { "Red" }
@@ -1333,24 +1349,45 @@ function Show-Menu {
     Write-Host " (Recomendado $rec4)" -ForegroundColor Yellow
     Write-Host " Modo de maximo rendimiento para gaming" -ForegroundColor Gray
     Write-Host ""
+    # === NUEVA OPCIÓN 4: MOUSE POLLING RATE ===
+    $recMouse = "menos de 1000Hz"
+    $mouseColor = "White"
+    if ($script:mouseTested -and $script:mouseHz) {
+        if ($script:mouseHz -lt 1000) {
+            $mouseColor = "Green"
+        } else {
+            $mouseColor = "Red"
+        }
+    }
+    Write-Host "4. Hz Mouse -> " -NoNewline -ForegroundColor White
+    Write-Host "$script:mouseEstado" -NoNewline -ForegroundColor $mouseColor
+    Write-Host " (Recomendado $recMouse)" -ForegroundColor Yellow
+    Write-Host " Para evitar problemas de stuttering en algunos juegos se recomiendan menos de 1000Hz. No confundir con DPI. Configuralo en la aplicacion de tu mouse." -ForegroundColor Gray
+    Write-Host ""
 
-	# === NUEVA OPCIÓN 4: MOUSE POLLING RATE ===
-	$recMouse = "menos de 1000Hz"
-	$mouseColor = "White"
-	if ($script:mouseTested -and $script:mouseHz) {
-		if ($script:mouseHz -lt 1000) { 
-			$mouseColor = "Green" 
-		} else { 
-			$mouseColor = "Red" 
-		}
-	}
-	Write-Host "4. Hz Mouse -> " -NoNewline -ForegroundColor White
-	Write-Host "$script:mouseEstado" -NoNewline -ForegroundColor $mouseColor
-	Write-Host " (Recomendado $recMouse)" -ForegroundColor Yellow
-	Write-Host " Para evitar problemas de stuttering en algunos juegos se recomiendan menos de 1000Hz. No confundir con DPI. Configuralo en la aplicacion de tu mouse." -ForegroundColor Gray
-	Write-Host ""
+    # === DETECTAR SI HAY AMD RX (GPU-Z + REGISTRO) ===
+    $hasAMD = $false
+    $amdDetected = $false
 
-    # === 4. AMD Shader Cache (solo si hay AMD RX) ===
+    # 1. GPU-Z
+    if ($script:gpuzInfo) {
+        foreach ($info in $script:gpuzInfo) {
+            if ($info.Line -match "AMD Radeon RX [56789]") {
+                $amdDetected = $true
+                break
+            }
+        }
+    }
+
+    # 2. Registro (fallback)
+    if (-not $amdDetected) {
+        $gpus = Get-AllAMDGPUs
+        if ($gpus.Count -gt 0) { $amdDetected = $true }
+    }
+
+    $hasAMD = $amdDetected
+
+    # === 5. AMD Shader Cache (solo si hay AMD RX detectada por GPU-Z) ===
     if ($hasAMD) {
         $rec3 = "Siempre Activado"
         $color3 = if ($script:estado3 -eq $rec3) { "Green" } else { "Red" }
@@ -1358,9 +1395,7 @@ function Show-Menu {
         Write-Host "$script:estado3" -NoNewline -ForegroundColor $color3
         Write-Host " (Recomendado $rec3)" -ForegroundColor Yellow
         Write-Host " Mejora FPS en juegos (solo AMD RX): pool de cache ilimitado. AMD Optimizado = mas micro-cortes" -ForegroundColor Gray
-		Write-Host " Posible stuttering al principio al tener que generarse Shaders nuevos" -ForegroundColor Gray
-        #Write-Host " Ruta: $reg3Base" -ForegroundColor DarkGray
-        #Write-Host " Valor: $reg3Name = $script:valor3" -ForegroundColor DarkGray
+        Write-Host " Posible stuttering al principio al tener que generarse Shaders nuevos" -ForegroundColor Gray
         Write-Host ""
     }
 
@@ -1368,7 +1403,6 @@ function Show-Menu {
     Write-Host "INFO Placa Base:" -ForegroundColor Cyan
     Write-Host " $script:motherboard" -ForegroundColor White
     Write-Host ""
-
     Write-Host "INFO GPU (GPU-Z):" -ForegroundColor Cyan
     if ($script:gpuzInfo -and $script:gpuzInfo.Count -gt 0) {
         foreach ($info in $script:gpuzInfo) {
@@ -1382,7 +1416,6 @@ function Show-Menu {
         Write-Host " $($script:gpuzInfo)" -ForegroundColor Red
     }
     Write-Host ""
-
     Write-Host "INFO RAM (CPU-Z):" -ForegroundColor Cyan
     if ($script:cpuzInfo) {
         $ramColor = if ($script:cpuzInfo.Color -and $script:cpuzInfo.Color -match '^(Green|Red|Yellow|White|Cyan)$') { $script:cpuzInfo.Color } else { 'White' }
@@ -1394,19 +1427,40 @@ function Show-Menu {
         Write-Host " $($script:cpuzInfo)" -ForegroundColor Red
     }
     Write-Host ""
-
     Write-Host ""
     Write-Host "$script:backupInfo" -ForegroundColor Cyan
     Write-Host ""
-
     Write-Host "Opciones:" -ForegroundColor Green
     Write-Host " 1 - Alternar DirectStorage"
     Write-Host " 2 - Alternar MPO"
     Write-Host " 3 - Activar Modo de Energia: Maximo rendimiento"
-    Write-Host " 4 - Test Hz Mouse"	
+    Write-Host " 4 - Test Hz Mouse"
     if ($hasAMD) { Write-Host " 5 - AMD: Alternar Shader Cache" }
     Write-Host " S - Salir"
     Write-Host ""
+}
+
+# === FUNCIÓN GLOBAL: OBTENER PLANES DE ENERGÍA CON UTF8 Y LIMPIEZA ===
+function Get-PowerPlans {
+    $plansRaw = powercfg -l | Out-String -Stream
+    $plans = @()
+    foreach ($line in $plansRaw) {
+        if ($line -match '([a-f0-9-]{36})\s+(.+?)(?:\s+\(.*\))?$') {
+            $guid = $matches[1].Trim()
+            $rawName = $matches[2].Trim()
+            # QUITAR EL * DEL PLAN ACTIVO
+            $name = $rawName -replace '\*$', ''
+            # CONVERTIR UTF-8 → CORRECTO
+            $name = [System.Text.Encoding]::UTF8.GetString([System.Text.Encoding]::Default.GetBytes($name))
+            $isActive = $line -match '\*'
+            $plans += [PSCustomObject]@{
+                Guid     = $guid
+                Name     = $name
+                IsActive = $isActive
+            }
+        }
+    }
+    return $plans
 }
 
 # === VARIABLES ===
@@ -1442,12 +1496,21 @@ if ($modo -eq "1") {
 # === CONTINUAR AL MENÚ ===
 Show-Menu
 
-# === BUCLE ===
+# === CACHÉ DE DETECCIÓN AMD (solo una vez) ===
+$gpus = Get-AllAMDGPUs
+$hasAMDRX = $false
+if ($script:gpuzInfo) {
+    foreach ($info in $script:gpuzInfo) {
+        if ($info.Line -match "AMD Radeon RX [56789]") {
+            $hasAMDRX = $true
+            break
+        }
+    }
+}
+
+# === BUCLE PRINCIPAL ===
 do {
     $opcion = Read-Host "Elige opcion"
-    $gpus = Get-AllAMDGPUs
-    $hasAMD = $gpus.Count -gt 0
-
     switch ($opcion.ToUpper()) {
         "1" {
             $current = (Get-ItemProperty -Path $reg1Path -Name $reg1Name -ErrorAction SilentlyContinue).$reg1Name
@@ -1483,57 +1546,81 @@ do {
             Start-Sleep -Seconds 1
             Show-Menu
         }
-		"4" {
-			$null = Test-MousePollingRate  # Añadir $null = para ocultar el retorno
-			Start-Sleep -Milliseconds 800
-			Show-Menu
-		}
+        "4" {
+            $null = Test-MousePollingRate
+            Start-Sleep -Milliseconds 800
+            Show-Menu
+        }
         "5" {
-            if (-not $hasAMD) {
-                Write-Host "`nOpcion no valida (no hay GPU AMD)" -ForegroundColor Red
+            # === VALIDAR GPU AMD (usando caché) ===
+            if ($gpus.Count -eq 0 -and -not $hasAMDRX) {
+                Write-Host "`nOpcion no valida (no hay GPU AMD RX)" -ForegroundColor Red
                 Start-Sleep -Seconds 1
                 Show-Menu
                 continue
             }
+
+            # === FALLBACK: BUSCAR UMD SI NO EXISTE ===
+            if ($gpus.Count -eq 0 -and $hasAMDRX) {
+                $baseKey = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+                $subkeys = Get-ChildItem $baseKey -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match "^\d+$" }
+                foreach ($key in $subkeys) {
+                    $driverDesc = Get-ItemProperty -Path $key.PSPath -Name "DriverDesc" -ErrorAction SilentlyContinue
+                    if ($driverDesc -and $driverDesc.DriverDesc -match "AMD Radeon RX [56789]") {
+                        $umdPath = "$($key.PSPath)\UMD"
+                        if (-not (Test-Path $umdPath)) { New-Item -Path $umdPath -Force | Out-Null }
+                        $gpus = @([PSCustomObject]@{ UMD = $umdPath })
+                        break
+                    }
+                }
+            }
+
+            # === APLICAR CAMBIO ===
             $currentValue = $null
             try { $currentValue = (Get-ItemProperty -Path $gpus[0].UMD -Name $reg3Name -ErrorAction SilentlyContinue).$reg3Name } catch { }
             $current = if ($currentValue -and $currentValue[0] -eq 0x32) { 0x32 } else { 0x31 }
-           
+
             if ($current -eq 0x32) {
                 $applied = Apply-ShaderCacheToAll -Value @([byte]0x31, [byte]0x00)
                 Write-Host "`nShader Cache: AMD Optimizado (31 00) en $applied claves" -ForegroundColor Yellow
-                $changesMade = $true
             } else {
                 $applied = Apply-ShaderCacheToAll -Value @([byte]0x32, [byte]0x00)
                 Write-Host "`nShader Cache: Siempre Activado (32 00) en $applied claves" -ForegroundColor Green
                 Write-Host "Limpiando cache AMD..." -ForegroundColor Yellow
                 Clear-AMDCache
-                $changesMade = $true
             }
+            $changesMade = $true
             Start-Sleep -Milliseconds 800
             Show-Menu
         }
-        "S" {
-            Clear-Host
-            Write-Host "Saliendo..." -ForegroundColor Cyan
-            if ($changesMade) {
-                Write-Host ""
-                Write-Host "Se han realizado cambios" -ForegroundColor Yellow
-                Write-Host "Reinicio recomendado." -ForegroundColor White
-                Write-Host ""
-                Write-Host "[R] Reiniciar ahora" -ForegroundColor Green
-                Write-Host "[S] Salir sin reiniciar" -ForegroundColor Gray
-                $final = Read-Host "Opcion"
-                if ($final.ToUpper() -eq "R") {
-                    Write-Host "Reiniciando..." -ForegroundColor Cyan
-                    Start-Sleep -Seconds 2
-                    Restart-Computer -Force
-                }
-            }
-            Write-Host "Backup: $backupPath" -ForegroundColor Cyan
-            Start-Sleep -Seconds 2
-            exit
-        }
+		"S" {
+			Clear-Host
+			if ($changesMade) {
+				Write-Host "¡CAMBIOS APLICADOS!" -ForegroundColor Green
+				Write-Host "REINICIA EL PC para que surtan efecto" -ForegroundColor Yellow
+				Write-Host ""
+				Write-Host "[R] Reiniciar AHORA" -ForegroundColor Green
+				Write-Host "[C] Continuar en menu" -ForegroundColor Cyan
+				Write-Host "[S] Salir sin reiniciar" -ForegroundColor Gray
+				Write-Host ""
+				do {
+					$final = Read-Host "Elige (R/C/S)"
+				} while ($final.ToUpper() -notin "R","C","S")
+				
+				switch ($final.ToUpper()) {
+					"R" {
+						Write-Host "`nReiniciando en 3 segundos..." -ForegroundColor Red
+						Start-Sleep -Seconds 3
+						Restart-Computer -Force
+					}
+					"C" {
+						Show-Menu
+						continue
+					}
+				}
+			}
+			break
+		}
         default {
             Write-Host "`nOpcion invalida" -ForegroundColor Red
             Start-Sleep -Seconds 1
@@ -1541,4 +1628,3 @@ do {
         }
     }
 } while ($opcion.ToUpper() -ne "S")
-
