@@ -264,7 +264,7 @@ function Update-CPUZInfo {
 		Log-Progress "# GENERANDO MEMINFO.TXT" Yellow -Subsection
 
 		# === ESPERA PACIENTE SIN FORZAR CIERRE ===
-		$maxWait = 45  # Aumentado a 45 segundos para PCs viejos
+		$maxWait = 60  # Aumentado a 60 segundos para PCs viejos
 		$txtReady = $false
 		$fileDetected = $false
 
@@ -925,31 +925,42 @@ function Set-MaximoRendimiento {
         if ($targetPlan) { break }
     }
     
-    # === LIMPIEZA DE DUPLICADOS (NUEVA FUNCIONALIDAD) ===
-    $duplicatePlans = $plans | Where-Object { 
-        $cleanDupName = $_.Name -replace '[^\x00-\x7F]', 'a'
-        foreach ($name in $performanceNames) {
-            $escapedDupName = [regex]::Escape($name) -replace '[^\x00-\x7F]', 'a'
-            if ($cleanDupName -match $escapedDupName -and $_.Guid -ne $targetPlan.Guid) {
-                return $true
-            }
-        }
-        $false
-    }
-    
-    $deletedCount = 0
-    foreach ($dup in $duplicatePlans) {
-        $result = powercfg -delete $dup.Guid 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "Eliminado duplicado: $($dup.Name)" -ForegroundColor Cyan
-            $deletedCount++
-        }
-    }
-    if ($deletedCount -gt 0) {
-        Write-Host "Limpiados $deletedCount planes duplicados" -ForegroundColor Green
-        Start-Sleep -Seconds 2
-        $plans = Get-PowerPlans  # Recargar lista limpia
-    }
+	# === LIMPIEZA DE DUPLICADOS (SEGURA) ===
+	$activeOutput = powercfg -getactivescheme | Out-String
+	$activeGuid = $null
+	if ($activeOutput -match '([a-f0-9-]{36})') { $activeGuid = $matches[1] }
+
+	$duplicatePlans = $plans | Where-Object {
+		$cleanDupName = $_.Name -replace '[^\x00-\x7F]', 'a'
+		foreach ($name in $performanceNames) {
+			if ($cleanDupName -match [regex]::Escape($name) -and $_.Guid -ne $targetPlan.Guid) {
+				return $true
+			}
+		}
+		$false
+	}
+
+	$deletedCount = 0
+	foreach ($dup in $duplicatePlans) {
+		if ($dup.Guid -eq $activeGuid) {
+			Write-Host "Saltando duplicado ACTIVO: $($dup.Name)" -ForegroundColor DarkGray
+			continue
+		}
+		try {
+			powercfg -delete $dup.Guid | Out-Null
+			if ($LASTEXITCODE -eq 0) {
+				Write-Host "Eliminado duplicado: $($dup.Name)" -ForegroundColor Cyan
+				$deletedCount++
+			}
+		} catch {
+			Write-Host "ADVERTENCIA: No se pudo borrar $($dup.Name) (puede ser activo)" -ForegroundColor Yellow
+		}
+	}
+	if ($deletedCount -gt 0) {
+		Write-Host "Limpiados $deletedCount planes duplicados" -ForegroundColor Green
+		Start-Sleep -Seconds 2
+		$plans = Get-PowerPlans
+	}
     
     # Activar plan principal (si existe)
     if ($targetPlan -and $targetPlan.Guid -eq $activeGuid) {
