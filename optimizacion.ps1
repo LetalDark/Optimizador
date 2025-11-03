@@ -1,7 +1,7 @@
 # optimizacion.ps1
 # Optimizador
-# Ejecutar como ADMINISTRADOR
 
+# Ejecutar como ADMINISTRADOR
 $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     Write-Host "ERROR: Ejecutar como ADMINISTRADOR" -ForegroundColor Red
@@ -119,6 +119,9 @@ function Apply-ShaderCacheToAll {
     $gpus = Get-AllAMDGPUs
     $applied = 0
     foreach ($gpu in $gpus) {
+        # ← AÑADIR ESTO:
+        if ($gpu.Name -notmatch "RX [56789]") { continue }
+        # ← FIN
         try {
             if (-not (Test-Path $gpu.UMD)) {
                 New-Item -Path $gpu.UMD -Force | Out-Null
@@ -483,7 +486,7 @@ function Update-CPUZInfo {
         $script:xmpAdvice = $null
         if ($statusText -eq "Desactivado" -and $maxXMP -gt 0 -and $motherboardModel -ne "Desconocido") {
             $cleanName = $motherboardModel -replace '\s*\([^)]*\)', '' -replace '\s+$', ''
-            $script:xmpAdvice = "Mejoras de hasta un 20% en FPS. Para activar XMP busca en Google -> $cleanName enable XMP site:youtube.com"
+            $script:xmpAdvice = "Mejoras de hasta un 20% en FPS si se activa.`nCambio en BIOS. Para acceder a ella apaga el equipo y al encender presiona las teclas F2/F10/SUPR`nPara activar XMP busca en Google -> $cleanName enable XMP site:youtube.com"
         }
 
         $line = "RAM | XMP-$maxXMP | Actual: $currentSpeed MHz (x2 = $effectiveSpeed) -> $statusText"
@@ -829,9 +832,9 @@ function Update-GPUZInfo {
             if ($rebarOff) {
                 if ($script:motherboard -and $script:motherboard -ne "Desconocido" -and $script:motherboard -ne "No disponible") {
                     $cleanName = $script:motherboard -replace '\s*\([^)]*\)', '' -replace '\s+$', ''
-                    $script:rebarAdvice = "Mejoras de hasta un 15% en FPS. Para activar Resizable Bar busca en Google -> $cleanName enable Resizable Bar site:youtube.com"
+                    $script:rebarAdvice = "Mejoras de hasta un 15% en FPS si se activa.`nCambio en BIOS. Para acceder a ella apaga el equipo y al encender presiona las teclas F2/F10/SUPR`nPara activar Resizable Bar busca en Google -> $cleanName enable Resizable Bar site:youtube.com"
                 } else {
-                    $script:rebarAdvice = "Mejoras de hasta un 15% en FPS. Para activar Resizable Bar busca en Google -> enable Resizable Bar site:youtube.com"
+                    $script:rebarAdvice = "Mejoras de hasta un 15% en FPS si se activa.`nCambio en BIOS. Para acceder a ella apaga el equipo y al encender presiona las teclas F2/F10/SUPR`nPara activar Resizable Bar busca en Google -> enable Resizable Bar site:youtube.com"
                 }
             }
 
@@ -862,6 +865,29 @@ function Update-GPUZInfo {
             # Ignorar errores en limpieza
         }
     }
+}
+
+# === FUNCIÓN GLOBAL: OBTENER PLANES DE ENERGÍA CON UTF8 Y LIMPIEZA ===
+function Get-PowerPlans {
+    $plansRaw = powercfg -l | Out-String -Stream
+    $plans = @()
+    foreach ($line in $plansRaw) {
+        if ($line -match '([a-f0-9-]{36})\s+(.+?)(?:\s+\(.*\))?$') {
+            $guid = $matches[1].Trim()
+            $rawName = $matches[2].Trim()
+            # QUITAR EL * DEL PLAN ACTIVO
+            $name = $rawName -replace '\*$', ''
+            # CONVERTIR UTF-8 → CORRECTO
+            $name = [System.Text.Encoding]::UTF8.GetString([System.Text.Encoding]::Default.GetBytes($name))
+            $isActive = $line -match '\*'
+            $plans += [PSCustomObject]@{
+                Guid     = $guid
+                Name     = $name
+                IsActive = $isActive
+            }
+        }
+    }
+    return $plans
 }
 
 # === GESTIONAR MODO MAXIMO RENDIMIENTO (CON LIMPIEZA DUPLICADOS) ===
@@ -1024,10 +1050,11 @@ function Test-MousePollingRate {
     
 	# Evento de movimiento del raton - VERSION MEJORADA
 	$script:mouseMoveCount = 0
+	$lastTime = 0
 	$mouseMoveHandler = {
 		$mouseTimes.Add($sw.Elapsed.TotalMilliseconds)
 		$script:mouseMoveCount++
-		$sw.Restart()
+		$sw.Restart()   # ← Aquí pierdes el tiempo real entre eventos
 	}
 	$form.Add_MouseMove($mouseMoveHandler)
 
@@ -1116,6 +1143,48 @@ function Test-MousePollingRate {
         Write-Host "`nERROR: Pocos movimientos detectados ($($validTimes.Count)). Repite con movimientos mas rapidos." -ForegroundColor Red
         return $false
     }
+}
+
+# === DETECTAR Y ALTERNAR ACELERACION MOUSE ===
+function Get-MouseAccelStatus {
+    $regPath = "HKCU:\Control Panel\Mouse"
+    $accel = Get-ItemProperty -Path $regPath -Name "MouseSpeed" -ErrorAction SilentlyContinue
+    $threshold = Get-ItemProperty -Path $regPath -Name "MouseThreshold1" -ErrorAction SilentlyContinue
+    $threshold2 = Get-ItemProperty -Path $regPath -Name "MouseThreshold2" -ErrorAction SilentlyContinue
+    $speed = Get-ItemProperty -Path $regPath -Name "MouseSensitivity" -ErrorAction SilentlyContinue
+
+    $isOff = ($accel.MouseSpeed -eq "0") -and ($threshold.MouseThreshold1 -eq "0") -and ($threshold2.MouseThreshold2 -eq "0")
+    $sensOK = ($speed.MouseSensitivity -eq "10")  # 6/11 = 10 en registro
+
+    return @{
+        Estado = if ($isOff -and $sensOK) { "Desactivado" } else { "Activado" }
+        Color = if ($isOff -and $sensOK) { "Green" } else { "Red" }
+        Recomendado = "Desactivado"
+    }
+}
+
+function Toggle-MouseAcceleration {
+    $regPath = "HKCU:\Control Panel\Mouse"
+    $current = Get-MouseAccelStatus
+
+    if ($current.Estado -eq "Desactivado") {
+        # ACTIVAR (volver a Windows default)
+        Set-ItemProperty -Path $regPath -Name "MouseSpeed" -Value "1" -Type String
+        Set-ItemProperty -Path $regPath -Name "MouseThreshold1" -Value "6" -Type String
+        Set-ItemProperty -Path $regPath -Name "MouseThreshold2" -Value "10" -Type String
+        Set-ItemProperty -Path $regPath -Name "MouseSensitivity" -Value "10" -Type String
+        Write-Host "`nAceleracion del mouse: ACTIVADA (Windows default)" -ForegroundColor Yellow
+    } else {
+        # DESACTIVAR (gaming mode)
+        Set-ItemProperty -Path $regPath -Name "MouseSpeed" -Value "0" -Type String
+        Set-ItemProperty -Path $regPath -Name "MouseThreshold1" -Value "0" -Type String
+        Set-ItemProperty -Path $regPath -Name "MouseThreshold2" -Value "0" -Type String
+        Set-ItemProperty -Path $regPath -Name "MouseSensitivity" -Value "10" -Type String
+        Write-Host "`nAceleracion del mouse: DESACTIVADA (Gaming Mode)" -ForegroundColor Green
+        Write-Host "   + Aim consistente en shooters" -ForegroundColor Cyan
+        Write-Host "   + Muscle memory 100% real" -ForegroundColor Cyan
+    }
+    $changesMade = $true
 }
 
 # === ACTUALIZAR ESTADO ===
@@ -1218,6 +1287,11 @@ function Update-Status {
     } else {
         $script:mouseEstado = "Test no realizado"
     }
+	
+		# === MOUSE ACCELERATION ===
+	$mouseAccel = Get-MouseAccelStatus
+	$script:mouseAccelEstado = $mouseAccel.Estado
+	$script:mouseAccelColor = $mouseAccel.Color
 }
 
 # === SISTEMA DE LOG VISUAL CENTRALIZADO (COMPATIBLE PS 5.1) ===
@@ -1299,19 +1373,51 @@ function Start-AutoMode {
     # 4. Test Hz Mouse
     $null = Test-MousePollingRate
 
-    # 5. AMD Shader Cache -> Siempre Activado + limpiar
-    $gpus = Get-AllAMDGPUs
-    if ($gpus.Count -gt 0) {
-        $currentValue = (Get-ItemProperty -Path $gpus[0].UMD -Name $reg3Name -ErrorAction SilentlyContinue).$reg3Name
-        $current = if ($currentValue -and $currentValue[0] -eq 0x32) { 0x32 } else { 0x31 }
-        if ($current -ne 0x32) {
-            $applied = Apply-ShaderCacheToAll -Value @([byte]0x32, [byte]0x00)
-            Write-Host "Shader Cache: Siempre Activado en $applied claves" -ForegroundColor Green
-            Write-Host "Limpiando cache AMD..." -ForegroundColor Yellow
-            Clear-AMDCache
-        }
+    # 5. Mouse Acceleration -> OFF
+    $currentAccel = Get-MouseAccelStatus
+    if ($currentAccel.Estado -eq "Activado") {
+        Toggle-MouseAcceleration  # Desactiva si está ON
+        Write-Host "Mouse Acceleration: DESACTIVADA (Gaming Mode)" -ForegroundColor Green
     }
 
+	# 6. AMD Shader Cache -> Siempre Activado + limpiar
+	Log-Progress "Aplicando Shader Cache AMD..." Yellow
+
+	# === REFRESCAR GPUs SIEMPRE ===
+	$gpus = Get-AllAMDGPUs
+	if ($gpus.Count -eq 0) {
+		Log-Progress "No se detectó AMD RX → saltando Shader Cache" Gray
+	} else {
+		# === FORZAR CREACIÓN DE UMD SI NO EXISTE ===
+		foreach ($gpu in $gpus) {
+			if (-not (Test-Path $gpu.UMD)) {
+				New-Item -Path $gpu.UMD -Force | Out-Null
+				Log-Progress "Creada clave UMD: $($gpu.UMD)" DarkGray
+			}
+		}
+
+		# === LEER VALOR ACTUAL ===
+		$currentValue = $null
+		try {
+			$currentValue = (Get-ItemProperty -Path $gpus[0].UMD -Name $reg3Name -ErrorAction SilentlyContinue).$reg3Name
+		} catch {}
+
+		$currentByte = if ($currentValue) { $currentValue[0] } else { 0x31 }
+		$isAlwaysOn = $currentByte -eq 0x32
+
+		if (-not $isAlwaysOn) {
+			# === APLICAR 32 00 ===
+			$applied = Apply-ShaderCacheToAll -Value @([byte]0x32, [byte]0x00)
+			Log-Progress "Shader Cache: Siempre Activado (32 00) en $applied GPU(s)" Green
+			Log-Progress "Limpiando caché AMD..." Yellow
+			Clear-AMDCache
+		} else {
+			Log-Progress "Shader Cache: YA en Siempre Activado" Green
+		}
+	}
+	
+	# === REFRESCAR ESTADO ===
+    Update-Status
     Write-Host "`nCONFIGURACION AUTOMATICA COMPLETADA" -ForegroundColor Cyan
     Start-Sleep -Seconds 2
 }
@@ -1387,11 +1493,19 @@ function Show-Menu {
 
     $hasAMD = $amdDetected
 
-    # === 5. AMD Shader Cache (solo si hay AMD RX detectada por GPU-Z) ===
+	# === 5. NUEVA: ACELERACION MOUSE ===
+    Write-Host "5. Aceleracion Mouse -> " -NoNewline -ForegroundColor White
+    Write-Host "$script:mouseAccelEstado" -NoNewline -ForegroundColor $script:mouseAccelColor
+    Write-Host " (Recomendado Desactivado)" -ForegroundColor Yellow
+    Write-Host " Desactiva la aceleracion de Windows para AIM consistente en shooters (CS2, Valorant, CoD)" -ForegroundColor Gray
+    Write-Host " + Muscle memory real | + Headshots precisos" -ForegroundColor Cyan
+    Write-Host ""
+
+    # === 6. AMD Shader Cache (solo si hay AMD RX detectada por GPU-Z) ===
     if ($hasAMD) {
         $rec3 = "Siempre Activado"
         $color3 = if ($script:estado3 -eq $rec3) { "Green" } else { "Red" }
-        Write-Host "5. AMD: Shader Cache -> " -NoNewline -ForegroundColor White
+        Write-Host "6. AMD: Shader Cache -> " -NoNewline -ForegroundColor White
         Write-Host "$script:estado3" -NoNewline -ForegroundColor $color3
         Write-Host " (Recomendado $rec3)" -ForegroundColor Yellow
         Write-Host " Mejora FPS en juegos (solo AMD RX): pool de cache ilimitado. AMD Optimizado = mas micro-cortes" -ForegroundColor Gray
@@ -1435,32 +1549,10 @@ function Show-Menu {
     Write-Host " 2 - Alternar MPO"
     Write-Host " 3 - Activar Modo de Energia: Maximo rendimiento"
     Write-Host " 4 - Test Hz Mouse"
-    if ($hasAMD) { Write-Host " 5 - AMD: Alternar Shader Cache" }
+	Write-Host " 5 - Alternar Aceleracion Mouse"
+    if ($hasAMD) { Write-Host " 6 - AMD: Alternar Shader Cache" }
     Write-Host " S - Salir"
     Write-Host ""
-}
-
-# === FUNCIÓN GLOBAL: OBTENER PLANES DE ENERGÍA CON UTF8 Y LIMPIEZA ===
-function Get-PowerPlans {
-    $plansRaw = powercfg -l | Out-String -Stream
-    $plans = @()
-    foreach ($line in $plansRaw) {
-        if ($line -match '([a-f0-9-]{36})\s+(.+?)(?:\s+\(.*\))?$') {
-            $guid = $matches[1].Trim()
-            $rawName = $matches[2].Trim()
-            # QUITAR EL * DEL PLAN ACTIVO
-            $name = $rawName -replace '\*$', ''
-            # CONVERTIR UTF-8 → CORRECTO
-            $name = [System.Text.Encoding]::UTF8.GetString([System.Text.Encoding]::Default.GetBytes($name))
-            $isActive = $line -match '\*'
-            $plans += [PSCustomObject]@{
-                Guid     = $guid
-                Name     = $name
-                IsActive = $isActive
-            }
-        }
-    }
-    return $plans
 }
 
 # === VARIABLES ===
@@ -1551,7 +1643,12 @@ do {
             Start-Sleep -Milliseconds 800
             Show-Menu
         }
-        "5" {
+		"5" {
+			Toggle-MouseAcceleration
+			Start-Sleep -Milliseconds 800
+			Show-Menu
+		}
+        "6" {
             # === VALIDAR GPU AMD (usando caché) ===
             if ($gpus.Count -eq 0 -and -not $hasAMDRX) {
                 Write-Host "`nOpcion no valida (no hay GPU AMD RX)" -ForegroundColor Red
@@ -1596,26 +1693,21 @@ do {
 		"S" {
 			Clear-Host
 			if ($changesMade) {
-				Write-Host "¡CAMBIOS APLICADOS!" -ForegroundColor Green
+				Write-Host "CAMBIOS APLICADOS!!!" -ForegroundColor Green
 				Write-Host "REINICIA EL PC para que surtan efecto" -ForegroundColor Yellow
 				Write-Host ""
 				Write-Host "[R] Reiniciar AHORA" -ForegroundColor Green
-				Write-Host "[C] Continuar en menu" -ForegroundColor Cyan
 				Write-Host "[S] Salir sin reiniciar" -ForegroundColor Gray
 				Write-Host ""
 				do {
-					$final = Read-Host "Elige (R/C/S)"
-				} while ($final.ToUpper() -notin "R","C","S")
+					$final = Read-Host "Elige (R/S)"
+				} while ($final.ToUpper() -notin "R","S")
 				
 				switch ($final.ToUpper()) {
 					"R" {
 						Write-Host "`nReiniciando en 3 segundos..." -ForegroundColor Red
 						Start-Sleep -Seconds 3
 						Restart-Computer -Force
-					}
-					"C" {
-						Show-Menu
-						continue
 					}
 				}
 			}
