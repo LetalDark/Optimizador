@@ -1761,7 +1761,7 @@ function Show-FinalMenu {
     Write-Host "============================================" -ForegroundColor Cyan
     Write-Host ""
 
-    if ($changesMade) {
+    if ($script:changesMade) {
         Write-Host "SE HAN REALIZADO CAMBIOS" -ForegroundColor Red
         Write-Host ""
         Write-Host "REINICIA EL ORDENADOR PARA APLICAR TODOS LOS CAMBIOS" -ForegroundColor Green
