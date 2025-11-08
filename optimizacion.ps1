@@ -412,15 +412,16 @@ function Update-CPUZInfo {
             $statusColor = "Red" 
         }
 
-        # === CONSEJO XMP ===
-        $script:xmpAdvice = $null
-        if ($statusText -eq "Desactivado" -and $maxXMP -gt 0 -and $motherboardModel -ne "Desconocido") {
-            $cleanName = $motherboardModel -replace '\s*\([^)]*\)', '' -replace '\s+$', ''
-            $script:xmpAdvice = "Mejoras de hasta un 20% en FPS si se activa.`nCambio en BIOS. Para acceder a ella apaga el equipo y al encender presiona las teclas F2/F10/SUPR`nPara activar XMP busca en Google -> $cleanName enable XMP site:youtube.com"
-        }
-
         $line = "RAM | XMP-$maxXMP | Actual: $currentSpeed MHz (x2 = $effectiveSpeed) -> $statusText"
         $script:cpuzInfo = [PSCustomObject]@{ Line = $line; Color = $statusColor }
+        # === CONSEJO XMP MEJORADO ===
+        $script:xmpAdvice = $null
+        if ($statusText -eq "Desactivado" -and $maxXMP -gt 0 -and $script:motherboard -notin "Desconocido", "No disponible") {
+            $cleanName = ($script:motherboard -split " ")[0..1] -join " "
+            $cleanName = $cleanName -replace '\s*\([^)]*\)', '' -replace '\s+$', ''
+            $currentSpeedRounded = [math]::Round($currentSpeed, 0)
+            $script:xmpAdvice = "Pierdes hasta 25% FPS + stuttering por RAM lenta ($currentSpeedRounded MHz -> XMP-$maxXMP)`nBuscar en YouTube: `"$cleanName enable XMP`"`nActiva XMP en BIOS (F2/F10/SUPR al encender PC)"
+        }
 
         # === FINAL CPU-Z ===
         Log-Progress "# ----------------------------------------------------" Gray -Subsection
@@ -432,6 +433,19 @@ function Update-CPUZInfo {
         $script:motherboard = "No disponible"
         $script:xmpAdvice = $null
         Log-Progress "ERROR CPU-Z: $($_.Exception.Message)" Red -Error
+    }
+}
+
+# === AVISO BIOS XMP ===
+function Show-XmpWarning {
+    if ($script:xmpAdvice) {
+        $lines = $script:xmpAdvice -split "`n"
+        Write-Host ""
+        Write-Host "MUY RECOMENDADO: Activar XMP (perfil RAM)" -ForegroundColor Red
+        Write-Host $lines[0] -ForegroundColor Red
+        Write-Host $lines[1] -ForegroundColor Yellow
+        Write-Host $lines[2] -ForegroundColor Yellow
+        Write-Host ""
     }
 }
 
@@ -755,19 +769,14 @@ function Update-GPUZInfo {
             if ($script:gpuzInfo.Count -gt 0 -and $script:gpuzInfo[-1].Line -eq "") {
                 $script:gpuzInfo = $script:gpuzInfo[0..($script:gpuzInfo.Count-2)]
             }
-
-            # === CONSEJO REBAR (solo para menú) ===
-            $script:rebarAdvice = $null
+            # === CONSEJO REBAR MEJORADO ===
+            $script:rebarYoutube = $null
             $rebarOff = $script:gpuzInfo | Where-Object { $_.Line -match "ReBAR: Desactivado" }
             if ($rebarOff) {
-                if ($script:motherboard -and $script:motherboard -ne "Desconocido" -and $script:motherboard -ne "No disponible") {
-                    $cleanName = $script:motherboard -replace '\s*\([^)]*\)', '' -replace '\s+$', ''
-                    $script:rebarAdvice = "Mejoras de hasta un 15% en FPS si se activa.`nCambio en BIOS. Para acceder a ella apaga el equipo y al encender presiona las teclas F2/F10/SUPR`nPara activar Resizable Bar busca en Google -> $cleanName enable Resizable Bar site:youtube.com"
-                } else {
-                    $script:rebarAdvice = "Mejoras de hasta un 15% en FPS si se activa.`nCambio en BIOS. Para acceder a ella apaga el equipo y al encender presiona las teclas F2/F10/SUPR`nPara activar Resizable Bar busca en Google -> enable Resizable Bar site:youtube.com"
-                }
+                $cleanName = ($script:motherboard -split " ")[0..1] -join " "
+                $cleanName = $cleanName -replace '\s*\([^)]*\)', '' -replace '\s+$', ''
+                $script:rebarYoutube = "$cleanName enable Resizable BAR"
             }
-
             # === FINAL GPU-Z ===
             Log-Progress "# ----------------------------------------------------" Gray -Subsection
             Log-Progress "# GPU-Z: INFORMACION LEIDA CORRECTAMENTE" Green -Subsection
@@ -794,6 +803,18 @@ function Update-GPUZInfo {
         } catch {
             # Ignorar errores en limpieza
         }
+    }
+}
+
+# === AVISO BIOS REBAR ===
+function Show-RebarWarning {
+    if ($script:rebarYoutube) {
+        Write-Host ""
+        Write-Host "MUY RECOMENDADO: Activar Resizable BAR (ReBAR)" -ForegroundColor Red
+        Write-Host "Pierdes hasta 20% FPS en juegos modernos" -ForegroundColor Red
+        Write-Host "Buscar en YouTube: `"$script:rebarYoutube`"" -ForegroundColor Yellow
+        Write-Host "Activa ReBAR en BIOS (F2/F10/SUPR al encender PC)" -ForegroundColor Yellow
+        Write-Host ""
     }
 }
 
@@ -1405,6 +1426,7 @@ function Start-AutoMode {
 	# === REFRESCAR ESTADO ===
     Update-Status
     Write-Host "`nCONFIGURACION AUTOMATICA COMPLETADA" -ForegroundColor Cyan
+	
     Start-Sleep -Seconds 2
 }
 
@@ -1590,42 +1612,65 @@ function Get-DynamicMenuOptions {
         }
     }
 
-	# === AMD SHADER CACHE (solo si hay AMD RX) ===
-	if ($script:hasAMD) {
-		$options += @{
-			Number = $options.Count + 1
-			Key = [string]($options.Count + 1)
-			Text = "AMD: Alternar Shader Cache"
-			Action = {
-				# RECALCULAR GPUs DENTRO DEL ACTION (siempre seguro)
-				$localGpus = Get-AllAMDGPUs
-				if ($localGpus.Count -eq 0) {
-					Write-Host "`nNo se detectó ninguna GPU AMD RX" -ForegroundColor Red
-					Start-Sleep -Seconds 2
-					return
-				}
+    # === AMD SHADER CACHE (solo si hay AMD RX) ===
+    if ($script:hasAMD) {
+        $options += @{
+            Number = $options.Count + 1
+            Key    = [string]($options.Count + 1)
+            Text   = "AMD: Alternar Shader Cache"
+            Action = {
+                # --- CÓDIGO SEGURO SIN param ---
+                $localGpus = Get-AllAMDGPUs
+                if ($localGpus.Count -eq 0) {
+                    Write-Host "`nNo se detectó ninguna GPU AMD RX" -ForegroundColor Red
+                    Start-Sleep -Seconds 2
+                    return
+                }
 
-				# Leer valor actual
-				$currentValue = $null
-				try { 
-					$currentValue = (Get-ItemProperty -Path $localGpus[0].UMD -Name $reg3Name -ErrorAction SilentlyContinue).$reg3Name 
-				} catch { }
+                # Leer valor actual
+                $currentValue = $null
+                try {
+                    $currentValue = (Get-ItemProperty -Path $localGpus[0].UMD -Name $reg3Name -ErrorAction SilentlyContinue).$reg3Name
+                } catch { }
 
-				$currentByte = if ($currentValue) { $currentValue[0] } else { 0x31 }
+                $currentByte = if ($currentValue) { $currentValue[0] } else { 0x31 }
 
-				if ($currentByte -eq 0x32) {
-					$applied = Apply-ShaderCacheToAll -Value @([byte]0x31, [byte]0x00)
-					Write-Host "`nShader Cache: AMD Optimizado (31 00) en $applied GPU(s)" -ForegroundColor Yellow
-				} else {
-					$applied = Apply-ShaderCacheToAll -Value @([byte]0x32, [byte]0x00)
-					Write-Host "`nShader Cache: Siempre Activado (32 00) en $applied GPU(s)" -ForegroundColor Green
-					Write-Host "Limpiando cache AMD..." -ForegroundColor Yellow
-					Clear-AMDCache
-				}
-				Start-Sleep -Milliseconds 800
-			}
-		}
-	}
+                if ($currentByte -eq 0x32) {
+                    # Cambiar a 31 00 (AMD Optimizado)
+                    $applied = 0
+                    foreach ($gpu in $localGpus) {
+                        if ($gpu.Name -notmatch "RX [56789]") { continue }
+                        try {
+                            if (-not (Test-Path $gpu.UMD)) { New-Item -Path $gpu.UMD -Force | Out-Null }
+                            Set-ItemProperty -Path $gpu.UMD -Name $reg3Name -Value @([byte]0x31, [byte]0x00) -Type Binary -Force | Out-Null
+                            $applied++
+                        } catch {
+                            Log-Progress "ERROR Shader Cache [$($gpu.Name)]: $($_.Exception.Message)" Red
+                        }
+                    }
+                    Write-Host "`nShader Cache: AMD Optimizado (31 00) en $applied GPU(s)" -ForegroundColor Yellow
+                } else {
+                    # Cambiar a 32 00 (Siempre Activado)
+                    $applied = 0
+                    foreach ($gpu in $localGpus) {
+                        if ($gpu.Name -notmatch "RX [56789]") { continue }
+                        try {
+                            if (-not (Test-Path $gpu.UMD)) { New-Item -Path $gpu.UMD -Force | Out-Null }
+                            Set-ItemProperty -Path $gpu.UMD -Name $reg3Name -Value @([byte]0x32, [byte]0x00) -Type Binary -Force | Out-Null
+                            $applied++
+                        } catch {
+                            Log-Progress "ERROR Shader Cache [$($gpu.Name)]: $($_.Exception.Message)" Red
+                        }
+                    }
+                    Write-Host "`nShader Cache: Siempre Activado (32 00) en $applied GPU(s)" -ForegroundColor Green
+                    Write-Host "Limpiando cache AMD..." -ForegroundColor Yellow
+                    Clear-AMDCache
+                }
+                $script:changesMade = $true
+                Start-Sleep -Milliseconds 800
+            }
+        }
+    }
 
     # === NVIDIA (placeholder - se activará cuando lo implementes) ===
     if ($script:hasNVIDIA) {
@@ -1653,18 +1698,22 @@ function Get-DynamicMenuOptions {
 
 # === MOSTRAR MENU ===
 function Show-Menu {
+    # === 1. PRIMERO: GENERAR LAS OPCIONES DINÁMICAS ===
+    $script:menuOptions = Get-DynamicMenuOptions
+
+    # === 2. ACTUALIZAR ESTADO (necesario para colores y textos) ===
     Update-Status
+
+    # === 3. LIMPIAR PANTALLA ===
     Clear-Host
+
+    # === CABECERA ===
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host " OPTIMIZADOR " -ForegroundColor Yellow
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host ""
 
-    # === GENERAR OPCIONES DINAMICAS ===
-    $options = Get-DynamicMenuOptions
-    $script:menuOptions = $options
-
-    # === 1. DirectStorage ===
+    # === OPCIONES PRINCIPALES (FIJAS) ===
     $color1 = if ($script:estado1 -eq "Activado") { "Green" } else { "Red" }
     Write-Host "1. DirectStorage -> " -NoNewline -ForegroundColor White
     Write-Host "$script:estado1" -NoNewline -ForegroundColor $color1
@@ -1672,7 +1721,6 @@ function Show-Menu {
     Write-Host " DirectStorage es una tecnologia de Microsoft que mejora los tiempos de carga de los juegos al permitir que la tarjeta grafica acceda directamente a los datos del SSD / Puede causar inestabilidad o crasheos en Vulkan" -ForegroundColor Gray
     Write-Host ""
 
-    # === 2. MPO ===
     $color2 = if ($script:estado2 -eq "Desactivado") { "Green" } else { "Red" }
     Write-Host "2. Multi-Plane Overlay (MPO) -> " -NoNewline -ForegroundColor White
     Write-Host "$script:estado2" -NoNewline -ForegroundColor $color2
@@ -1680,7 +1728,6 @@ function Show-Menu {
     Write-Host " Multi-Plane Overlay, una caracteristica de renderizado grafico que busca optimizar el rendimiento. Desactivarlo evita parpadeos y stuttering / +Carga CPU" -ForegroundColor Gray
     Write-Host ""
 
-    # === 3. Modo Energia ===
     $color4 = if ($script:estado4 -eq "Activado") { "Green" } else { "Red" }
     Write-Host "3. Modo energia: Maximo rendimiento -> " -NoNewline -ForegroundColor White
     Write-Host "$script:estado4" -NoNewline -ForegroundColor $color4
@@ -1688,7 +1735,6 @@ function Show-Menu {
     Write-Host " Modo de maximo rendimiento para gaming" -ForegroundColor Gray
     Write-Host ""
 
-    # === 4. Hz Mouse ===
     $mouseColor = if ($script:mouseTested -and $script:mouseHz -lt 1000) { "Green" } elseif ($script:mouseTested) { "Red" } else { "White" }
     Write-Host "4. Hz Mouse -> " -NoNewline -ForegroundColor White
     Write-Host "$script:mouseEstado" -NoNewline -ForegroundColor $mouseColor
@@ -1696,7 +1742,6 @@ function Show-Menu {
     Write-Host " Para evitar problemas de stuttering en algunos juegos se recomiendan menos de 1000Hz. No confundir con DPI. Configuralo en la aplicacion de tu mouse." -ForegroundColor Gray
     Write-Host ""
 
-    # === 5. Aceleracion Mouse ===
     Write-Host "5. Aceleracion Mouse -> " -NoNewline -ForegroundColor White
     Write-Host "$script:mouseAccelEstado" -NoNewline -ForegroundColor $script:mouseAccelColor
     Write-Host " (Recomendado Desactivado)" -ForegroundColor Yellow
@@ -1704,9 +1749,9 @@ function Show-Menu {
     Write-Host " + Muscle memory real | + Headshots precisos" -ForegroundColor Cyan
     Write-Host ""
 
-    # === 6. AMD Shader Cache (solo si hay AMD) ===
-    if ($script:hasAMD) {
-        $amdOption = $options | Where-Object Text -match 'AMD'
+    # === AMD SHADER CACHE (solo si está en menuOptions) ===
+    $amdOption = $script:menuOptions | Where-Object { $_.Text -match "AMD: Alternar Shader Cache" }
+    if ($amdOption) {
         $color3 = if ($script:estado3 -eq "Siempre Activado") { "Green" } else { "Red" }
         Write-Host "$($amdOption.Number). AMD: Shader Cache -> " -NoNewline -ForegroundColor White
         Write-Host "$script:estado3" -NoNewline -ForegroundColor $color3
@@ -1716,9 +1761,9 @@ function Show-Menu {
         Write-Host ""
     }
 
-    # === NVIDIA (si hay) ===
-    if ($script:hasNVIDIA) {
-        $nvidiaOption = $options | Where-Object Text -match 'NVIDIA'
+    # === NVIDIA (solo si está en menuOptions) ===
+    $nvidiaOption = $script:menuOptions | Where-Object { $_.Text -match "NVIDIA: Optimizar" }
+    if ($nvidiaOption) {
         Write-Host "$($nvidiaOption.Number). NVIDIA: Optimizar -> " -NoNewline -ForegroundColor White
         Write-Host "Pendiente" -NoNewline -ForegroundColor Yellow
         Write-Host " (proximamente)" -ForegroundColor Gray
@@ -1731,19 +1776,29 @@ function Show-Menu {
     Write-Host ""
 
     Write-Host "INFO GPU (GPU-Z):" -ForegroundColor Cyan
-    if ($script:gpuzInfo) { foreach ($info in $script:gpuzInfo) { Write-Host " $($info.Line)" -ForegroundColor $info.Color } }
+    if ($script:gpuzInfo) {
+        foreach ($info in $script:gpuzInfo) {
+            if ($info.Line.Trim() -ne "") {
+                Write-Host " $($info.Line)" -ForegroundColor $info.Color
+            }
+        }
+    }
+    Show-RebarWarning
     Write-Host ""
 
     Write-Host "INFO RAM (CPU-Z):" -ForegroundColor Cyan
-    if ($script:cpuzInfo) { Write-Host " $($script:cpuzInfo.Line)" -ForegroundColor $script:cpuzInfo.Color }
+    if ($script:cpuzInfo) {
+        Write-Host " $($script:cpuzInfo.Line)" -ForegroundColor $script:cpuzInfo.Color
+    }
+    Show-XmpWarning
     Write-Host ""
 
     Write-Host "$script:backupInfo" -ForegroundColor Cyan
     Write-Host ""
 
-    # === OPCIONES ===
+    # === LISTADO DE OPCIONES DISPONIBLES ===
     Write-Host "Opciones:" -ForegroundColor Green
-    foreach ($opt in $options) {
+    foreach ($opt in $script:menuOptions) {
         if ($opt.Key -eq "S") {
             Write-Host " $($opt.Key) - $($opt.Text)" -ForegroundColor Gray
         } else {
