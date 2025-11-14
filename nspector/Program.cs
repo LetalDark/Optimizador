@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -49,7 +49,7 @@ namespace nspector
                         var import = DrsServiceLocator.ImportService;
                         var importReport = import.ImportProfiles(args[argFileIndex]);
                         GC.Collect();
-                        SendImportMessageToExistingInstance();
+                        SendImportMessageToExistingInstance(); // AÑADIDO
                         if (string.IsNullOrEmpty(importReport) && !ArgExists(args, "-silentImport") && !ArgExists(args, "-silent"))
                         {
                             frmDrvSettings.ShowImportDoneMessage(importReport);
@@ -77,7 +77,7 @@ namespace nspector
                     }
                     else
                     {
-                        BringExistingInstanceToFront();
+                        BringExistingInstanceToFront(); // AÑADIDO
                     }
                 }
             }
@@ -117,7 +117,6 @@ namespace nspector
                 {
                     var apps = new Dictionary<string, string>();
                     var settings = service.GetSettingsForProfile(profileName, SettingViewMode.IncludeScannedSetttings, ref apps);
-
                     foreach (var s in settings.Where(x => !x.IsSettingHidden).OrderBy(x => x.SettingId))
                     {
                         string name = s.SettingText ?? "Unknown";
@@ -176,6 +175,7 @@ namespace nspector
             return -1;
         }
 
+        // === FUNCIONES FALTANTES (DEL ORIGINAL) ===
         static void SendImportMessageToExistingInstance()
         {
             Process current = Process.GetCurrentProcess();
