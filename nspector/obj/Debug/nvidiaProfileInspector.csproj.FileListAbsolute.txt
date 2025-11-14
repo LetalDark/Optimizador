@@ -1,0 +1,13 @@
+C:\Users\Albert\Desktop\Fixes\nvidiaProfileInspector\nspector\bin\Debug\Reference.xml
+C:\Users\Albert\Desktop\Fixes\nvidiaProfileInspector\nspector\bin\Debug\nvidiaProfileInspector.exe.config
+C:\Users\Albert\Desktop\Fixes\nvidiaProfileInspector\nspector\bin\Debug\nvidiaProfileInspector.exe
+C:\Users\Albert\Desktop\Fixes\nvidiaProfileInspector\nspector\bin\Debug\nvidiaProfileInspector.pdb
+C:\Users\Albert\Desktop\Fixes\nvidiaProfileInspector\nspector\obj\Debug\nvidiaProfileInspector.csproj.AssemblyReference.cache
+C:\Users\Albert\Desktop\Fixes\nvidiaProfileInspector\nspector\obj\Debug\nspector.frmBitEditor.resources
+C:\Users\Albert\Desktop\Fixes\nvidiaProfileInspector\nspector\obj\Debug\nspector.frmDrvSettings.resources
+C:\Users\Albert\Desktop\Fixes\nvidiaProfileInspector\nspector\obj\Debug\nspector.frmExportProfiles.resources
+C:\Users\Albert\Desktop\Fixes\nvidiaProfileInspector\nspector\obj\Debug\nspector.Properties.Resources.resources
+C:\Users\Albert\Desktop\Fixes\nvidiaProfileInspector\nspector\obj\Debug\nvidiaProfileInspector.csproj.GenerateResource.cache
+C:\Users\Albert\Desktop\Fixes\nvidiaProfileInspector\nspector\obj\Debug\nvidiaProfileInspector.csproj.CoreCompileInputs.cache
+C:\Users\Albert\Desktop\Fixes\nvidiaProfileInspector\nspector\obj\Debug\nvidiaProfileInspector.exe
+C:\Users\Albert\Desktop\Fixes\nvidiaProfileInspector\nspector\obj\Debug\nvidiaProfileInspector.pdb
