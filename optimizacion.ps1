@@ -1508,6 +1508,161 @@ function Clear-GPUCache {
     }
 }
 
+# === ANALIZAR ESPACIO EN DISCO ===
+function Get-DiskSpaceInfo {
+    $systemDrive = $env:SystemDrive  # Normalmente C:
+    $allDrives = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Root -match '^[A-Z]:\\$' }
+    $results = @()
+
+    foreach ($drive in $allDrives) {
+        try {
+            $free = $drive.Free
+            $used = $drive.Used
+            $total = $free + $used
+            $percentFree = [math]::Round(($free / $total) * 100, 1)
+            $percentUsed = [math]::Round(($used / $total) * 100, 1)
+
+            $color = if ($percentFree -lt 20) { "Red" } elseif ($percentFree -lt 40) { "Yellow" } else { "Green" }
+
+            $results += [PSCustomObject]@{
+                Drive       = $drive.Name
+                TotalGB     = [math]::Round($total / 1GB, 1)
+                FreeGB      = [math]::Round($free / 1GB, 1)
+                UsedGB      = [math]::Round($used / 1GB, 1)
+                PercentFree = $percentFree
+                PercentUsed = $percentUsed
+                Color       = $color
+                IsSystem    = ($drive.Root -eq "$systemDrive\")
+            }
+        } catch { }
+    }
+
+    $script:systemDisk = $results | Where-Object { $_.IsSystem } | Select-Object -First 1
+    $script:allDisks = $results
+}
+
+# === OBTENER RAM ===
+function Get-PhysicalRAM {
+    try {
+        $ram = (Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property Capacity -Sum).Sum
+        return [math]::Round($ram / 1GB, 2)
+    } catch {
+        return 0
+    }
+}
+
+# === CONFIGURAR LA MEMORIA VIRTUAL ===
+function Configure-CustomPagefile {
+    param([switch]$Silent)
+    $physicalRAM = Get-PhysicalRAM
+    $ramGB = [int]$physicalRAM
+    if ($ramGB -ge ($Global:TargetRAM / 1GB)) {
+        Log-Progress "RAM suficiente ($ramGB GB). No se necesita pagefile extra." Gray
+        return
+    }
+
+    $neededGB = ($Global:TargetRAM / 1GB) - $ramGB
+    $minSizeMB = [int]($neededGB * 1024)
+    $maxSizeMB = $minSizeMB * 2
+
+    Log-Progress "RAM fisica: $ramGB GB. Objetivo: $($Global:TargetRAM / 1GB) GB" Yellow
+    Log-Progress "Se necesita al menos $neededGB GB de memoria virtual" Yellow
+    Log-Progress "Config: Min $minSizeMB MB | Max $maxSizeMB MB" Cyan
+
+    # Obtener discos fisicos SSD
+    $ssdDisks = Get-PhysicalDisk | Where-Object { $_.MediaType -eq "SSD" -and $_.OperationalStatus -eq "OK" }
+    if (-not $ssdDisks) {
+        Log-Progress "No se encontraron discos SSD." Red
+        return
+    }
+
+    # Relacionar discos con particiones y letras
+    $validDrives = @()
+    foreach ($disk in $ssdDisks) {
+        $partitions = Get-Partition -DiskNumber $disk.DeviceId -ErrorAction SilentlyContinue
+        foreach ($part in $partitions) {
+            $volume = Get-Volume -Partition $part -ErrorAction SilentlyContinue
+            if ($volume -and $volume.DriveLetter -and $volume.FileSystem -eq "NTFS") {
+                $driveLetter = "$($volume.DriveLetter):"
+                $freeGB = [math]::Round($volume.SizeRemaining / 1GB, 1)
+                if ($freeGB -ge ($neededGB * 2)) {
+                    $validDrives += [PSCustomObject]@{
+                        Letter = $driveLetter
+                        FreeGB = $freeGB
+                        Disk   = $disk.FriendlyName
+                    }
+                }
+            }
+        }
+    }
+
+    if ($validDrives.Count -eq 0) {
+        Log-Progress "Ningun SSD tiene suficiente espacio libre ($($neededGB * 2) GB requeridos)." Red
+        return
+    }
+
+    # Mostrar opciones
+    if (-not $Silent) {
+        # === MODO INTERACTIVO (menú) ===
+        Write-Host "`nSelecciona unidad SSD para pagefile:" -ForegroundColor Cyan
+        for ($i = 0; $i -lt $validDrives.Count; $i++) {
+            $d = $validDrives[$i]
+            Write-Host " $($i+1) - $($d.Letter) ($($d.FreeGB) GB libre) - $($d.Disk)" -ForegroundColor White
+        }
+        Write-Host " S - Salir" -ForegroundColor Gray
+        do { $choice = (Read-Host "`nElige 1-$($validDrives.Count) o S").ToUpper() }
+        while ($choice -notin 1..$validDrives.Count -and $choice -ne "S")
+        if ($choice -eq "S") { return }
+        $selected = $validDrives[$choice - 1]
+    } else {
+        # === MODO AUTOMÁTICO: elige el SSD con más espacio libre ===
+        $selected = $validDrives | Sort-Object FreeGB -Descending | Select-Object -First 1
+        if (-not $selected) {
+            Log-Progress "No hay SSD con suficiente espacio ($($neededGB * 2) GB requeridos)." Red
+            return
+        }
+        Write-Host "Auto: Usando $($selected.Letter) ($($selected.FreeGB) GB libre)" -ForegroundColor Cyan
+    }
+    $pagefilePath = "$($selected.Letter)\pagefile.sys"
+
+    # Backup actual
+    if (-not $script:pagefileBackupDone) {
+        $current = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" -Name "PagingFiles" -ErrorAction SilentlyContinue).PagingFiles
+        if ($current) {
+            $backupFile = "$script:backupPath\pagefile_backup.reg"
+            "Windows Registry Editor Version 5.00`n`n[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management]`n`"PagingFiles`"=`"$($current -join "`n")`"" | Out-File $backupFile -Encoding ASCII
+            Log-Progress "Backup de pagefile guardado" Green
+            $script:pagefileBackupDone = $true
+        }
+    }
+
+    # Desactivar gestion automatica
+    try {
+        $computer = Get-CimInstance Win32_ComputerSystem
+        $computer.AutomaticManagedPagefile = $false
+        Set-CimInstance -CimInstance $computer | Out-Null
+    } catch { Log-Progress "Error desactivando gestion automatica" Red }
+
+    # Configurar pagefile
+    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management"
+    $value = "$pagefilePath $minSizeMB $maxSizeMB"
+    Set-ItemProperty -Path $regPath -Name "PagingFiles" -Value $value -Type MultiString -Force | Out-Null
+
+    # Limpiar pagefile anterior
+    $oldPagefile = "C:\pagefile.sys"
+    if (Test-Path $oldPagefile) {
+        try { Remove-Item $oldPagefile -Force -ErrorAction SilentlyContinue } catch { }
+    }
+
+    Write-Host "`nPagefile configurado en $($selected.Letter)" -ForegroundColor Green
+    Write-Host " Cantidad: $minSizeMB MB - $maxSizeMB MB" -ForegroundColor Cyan
+    Write-Host " SSD: $($selected.Disk)" -ForegroundColor Gray
+    Write-Host " REINICIA para aplicar." -ForegroundColor Red
+
+    $script:changesMade = $true
+    Start-Sleep -Seconds 2
+}
+
 # === MODO AUTOMÁTICO / MANUAL ===
 function Start-AutoMode {
 	$script:changesMade = $true
@@ -1585,6 +1740,15 @@ function Start-AutoMode {
 				Write-Host "ERROR: No se pudo aplicar Shader Cache NVIDIA" -ForegroundColor Red
 			}
 		}
+		
+	# === 8. MEMORIA VIRTUAL: COMPLETAR A $Global:TargetRAM (SOLO SI ES NECESARIO) ===
+	$physicalRAM = Get-PhysicalRAM
+	if ($physicalRAM -lt ($Global:TargetRAM / 1GB)) {
+		Write-Host "`nConfigurando memoria virtual para alcanzar $($Global:TargetRAM / 1GB)GB..." -ForegroundColor Yellow
+		Configure-CustomPagefile -Silent
+	} else {
+		Write-Host "RAM suficiente ($([int]$physicalRAM) GB). No se necesita pagefile." -ForegroundColor Gray
+	}
 	
 	# === REFRESCAR ESTADO ===
     Update-Status
@@ -1710,6 +1874,53 @@ function Update-Status {
 			$script:valor7 = "N/A"
 		}
 	}
+	
+    # === ESPACIO EN DISCO ===
+    Get-DiskSpaceInfo
+
+    # === ESTADO MEMORIA VIRTUAL – LECTURA FIABLE DEL REGISTRO ===
+    $physicalRAM = Get-PhysicalRAM
+    $ramGB = [int]$physicalRAM
+    $targetGB = $Global:TargetRAM / 1GB
+
+    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management"
+    $pagingProp = Get-ItemProperty $regPath -Name "PagingFiles" -ErrorAction SilentlyContinue
+
+    $currentPagefileGB = 0
+    $driveLetter = "Ninguna"
+
+    if ($pagingProp -and $pagingProp.PagingFiles) {
+        # Forzar como array y limpiar
+        $lines = @($pagingProp.PagingFiles) | Where-Object { $_ }
+        foreach ($line in $lines) {
+            if ($line -match "^([A-Z]:\\pagefile\.sys)\s+(\d+)\s+(\d+)") {
+                $driveLetter = ($matches[1] -split ":")[0] + ":"
+                $maxMB = [int]$matches[3]
+                $currentPagefileGB = [math]::Round($maxMB / 1024, 1)
+                break  # Solo la primera entrada activa
+            }
+        }
+    }
+
+    $totalVirtualRAM = $ramGB + $currentPagefileGB
+
+    if ($ramGB -ge $targetGB) {
+        $script:pagefileState = "$ramGB GB RAM (suficiente)"
+        $script:pagefileColor = "Green"
+    }
+    elseif ($currentPagefileGB -gt 0) {
+        $script:pagefileState = "Configurado en $driveLetter (Actualmente: $totalVirtualRAM GB - Objetivo: $targetGB GB)"
+        $color = if ($totalVirtualRAM -ge $targetGB) { "Green" } 
+                 elseif ($totalVirtualRAM -ge ($targetGB * 0.8)) { "Yellow" } 
+                 else { "Red" }
+        $script:pagefileColor = $color
+    }
+    else {
+        $needed = $targetGB - $ramGB
+        $script:pagefileState = "$ramGB GB RAM (falta $needed GB)"
+        $script:pagefileColor = "Red"
+    }
+
 }
 
 # === DETECCIÓN DINÁMICA DE OPCIONES DE MENÚ ===
@@ -1855,7 +2066,7 @@ function Get-DynamicMenuOptions {
 			Text = "NVIDIA: Reducir/Aumentar Shader Cache"
 			Action = {
 				$sizes = @("Off","128MB","256MB","512MB","1GB","4GB","5GB","8GB","10GB","100GB","Unlimited")
-				Write-Host "`nSelecciona tamaño de Shader Cache:" -ForegroundColor Cyan
+				Write-Host "`nSelecciona cantidad de Shader Cache:" -ForegroundColor Cyan
 				for ($i = 0; $i -lt $sizes.Count; $i++) {
 					$name = $sizes[$i]
 					$color = if ($name -eq "Unlimited" -or ($name -match "GB" -and [int]($name -replace "GB","") -ge 10)) { "Green" } else { "Red" }
@@ -1878,6 +2089,19 @@ function Get-DynamicMenuOptions {
 			}
 		}
 	}
+	
+    # === MEMORIA VIRTUAL DINAMICA (solo si RAM < TargetRAM) ===
+    $physicalRAM = Get-PhysicalRAM
+    if ($physicalRAM -lt ($Global:TargetRAM / 1GB)) {
+        $options += @{
+            Number = $options.Count + 1
+            Key = [string]($options.Count + 1)
+            Text = "Memoria Virtual: Completar a $($Global:TargetRAM / 1GB)GB"
+            Action = {
+                Configure-CustomPagefile
+            }
+        }
+    }
 
     # Opción Salir (siempre al final)
     $options += @{
@@ -1990,6 +2214,28 @@ function Show-Menu {
     Show-XmpWarning
     Write-Host ""
 
+    # === ESPACIO EN DISCO (solo sistema) ===
+    Write-Host "ESPACIO DE DISCO EN EL SISTEMA OPERATIVO" -ForegroundColor Cyan
+    if ($script:systemDisk) {
+        $freePercent = $script:systemDisk.PercentFree
+        $color = if ($freePercent -lt 20) { "Red" } elseif ($freePercent -lt 30) { "Yellow" } else { "Green" }
+        Write-Host " $($script:systemDisk.Drive): - " -NoNewline -ForegroundColor White
+        Write-Host "$freePercent% libre" -ForegroundColor $color
+        if ($freePercent -lt 20) {
+            Write-Host "ADVERTENCIA: Espacio critico. Libera espacio urgentemente." -ForegroundColor Red
+            Write-Host "Usa TreeSize Free: https://www.jam-software.com/treesize_free" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host " No se pudo detectar el disco del sistema." -ForegroundColor Red
+    }
+    Write-Host ""
+	
+	Write-Host "MEMORIA VIRTUAL" -ForegroundColor Cyan
+    Write-Host "Configuracion actual -> " -NoNewline -ForegroundColor White
+    Write-Host "$script:pagefileState" -ForegroundColor $script:pagefileColor
+    Write-Host " Util para sistemas con menos de 32GB de RAM" -ForegroundColor Gray
+    Write-Host ""
+
     Write-Host "$script:backupInfo" -ForegroundColor Cyan
     Write-Host ""
 
@@ -2046,6 +2292,8 @@ function Show-FinalMenu {
 }
 
 # === VARIABLES ===
+$Global:TargetRAM = 32GB
+$script:pagefileBackupDone = $false
 $script:changesMade = $false
 $script:gpus = $null
 $script:hasAMD = $false
