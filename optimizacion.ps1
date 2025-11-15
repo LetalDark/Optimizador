@@ -782,6 +782,18 @@ function Update-GPUZInfo {
             Log-Progress "# GPU-Z: INFORMACION LEIDA CORRECTAMENTE" Green -Subsection
             Log-Progress "# ----------------------------------------------------" Gray -Subsection
 
+			# === MOSTRAR GPUs DETECTADAS AQUÍ ===
+			Log-Progress "# GPUs DETECTADAS (GPU-Z)" Cyan -Subsection
+			Log-Progress "# -------------------------------------------------------------------" Gray -Subsection
+			foreach ($info in $script:gpuzInfo) {
+				if ($info.Line.Trim() -ne "" -and $info.Line -notmatch "ReBAR:|Conexion actual:") {
+					if ($info.Line -match "^(AMD|NVIDIA|Intel|GeForce|Radeon|Arc)") {
+						Log-Progress "# $($info.Line.Trim())" White -Subsection
+					}
+				}
+			}
+			Log-Progress "# -------------------------------------------------------------------" Gray -Subsection
+
         } catch {
             $script:gpuzInfo = "Error procesando XML de GPU-Z: $($_.Exception.Message)"
             Log-Progress "$script:gpuzInfo" Red -Error
@@ -847,6 +859,156 @@ function GPU-CheckGPUZorRegister {
 	Log-Progress "GPU Detectada: AMD=$script:hasAMD | NVIDIA=$script:hasNVIDIA" Cyan
 }
 
+# === INICIALIZAR (DESCARGA + PRIMERA LECTURA – CON LOGS) ===
+function Initialize-NVIDIAInspector {
+    if (-not $script:hasNVIDIA) {
+        $script:nvidiaShaderCache = "No NVIDIA"
+        return
+    }
+
+    $scriptPath = $PSScriptRoot
+    if (-not $scriptPath) { $scriptPath = (Get-Location).Path }
+    $zipUrl = "https://github.com/LetalDark/Optimizador/releases/download/1.0-nspector/nspector.zip"
+    $zipPath = "$scriptPath\nspector.zip"
+    $exeName = "nvidiaProfileInspector.exe"
+    $exePath = "$scriptPath\$exeName"
+    $tempExtract = "$scriptPath\nspector_extract"
+
+    # === SECCIÓN VISUAL ===
+    Log-Progress "# # ----------------------------------------------------" Gray -Subsection
+    Log-Progress "# # INICIANDO NVIDIA Profile Inspector" Cyan -Subsection
+    Log-Progress "# # ----------------------------------------------------" Gray -Subsection
+
+    # === SI NO EXISTE, DESCARGAR Y EXTRAER ===
+    if (-not (Test-Path $exePath)) {
+        # === LIMPIAR ===
+        foreach ($p in @($zipPath)) { if (Test-Path $p) { Remove-Item $p -Force } }
+        if (Test-Path $tempExtract) { Remove-Item $tempExtract -Recurse -Force }
+
+        # === DESCARGAR ===
+        try {
+            Log-Progress "Descargando NVIDIA Profile Inspector..." Yellow
+            Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+            Log-Progress "Descargado OK" Green
+        } catch {
+            Log-Progress "ERROR DESCARGA" Red -Error
+            $script:nvidiaShaderCache = "Error descarga"
+            return
+        }
+
+        # === EXTRAER ===
+        try {
+            Log-Progress "Extrayendo..." Yellow
+            Expand-Archive -Path $zipPath -DestinationPath $tempExtract -Force -ErrorAction Stop
+            Log-Progress "Extraido con Expand-Archive" Green
+        } catch {
+            Log-Progress "Expand-Archive fallo, usando COM Shell..." Yellow
+            try {
+                $shell = New-Object -ComObject Shell.Application
+                $zip = $shell.NameSpace($zipPath)
+                foreach ($item in $zip.Items()) {
+                    $shell.NameSpace($tempExtract).CopyHere($item, 0x14)
+                }
+                Log-Progress "Extraido con COM Shell" Green
+            } catch {
+                Log-Progress "ERROR EXTRACCION" Red -Error
+                $script:nvidiaShaderCache = "Error extraccion"
+                return
+            }
+        }
+
+        # === MOVER ARCHIVOS ===
+        $files = Get-ChildItem -Path $tempExtract -File
+        foreach ($file in $files) {
+            Move-Item $file.FullName "$scriptPath\$($file.Name)" -Force
+        }
+        Log-Progress "Listo: $exeName + config + XML" Green
+
+        # === LIMPIAR ===
+        Remove-Item $zipPath -Force
+        Remove-Item $tempExtract -Recurse -Force
+    } else {
+        Log-Progress "Ya descargado: $exeName" Gray
+    }
+
+    # === PRIMERA LECTURA ===
+    Log-Progress "Leyendo Shader Cache..." Yellow
+    Read-NVIDIAShaderCache
+    if ($script:nvidiaShaderCache -is [PSCustomObject]) {
+        Log-Progress "Shader Cache: $($script:nvidiaShaderCache.Text) ($($script:nvidiaShaderCache.Hex))" $script:nvidiaShaderCache.Color
+    } else {
+        Log-Progress "Shader Cache no detectado" Red
+    }
+}
+
+# === LEER SHADER CACHE (SOLO LECTURA – SIN LOGS) ===
+function Read-NVIDIAShaderCache {
+    $exePath = "$PSScriptRoot\nvidiaProfileInspector.exe"
+    if (-not (Test-Path $exePath)) {
+        $script:nvidiaShaderCache = "No detectado"
+        return
+    }
+
+    $output = ""
+    try {
+        $temp = "$PSScriptRoot\nspector_tmp.txt"
+        Start-Process -FilePath $exePath -ArgumentList '-p "Base Profile" --list-settings' -Wait -NoNewWindow -RedirectStandardOutput $temp -ErrorAction Stop | Out-Null
+        $output = Get-Content $temp -Raw -ErrorAction SilentlyContinue
+        Remove-Item $temp -Force -ErrorAction SilentlyContinue
+    } catch { }
+
+    $line = $output | Where-Object { $_ -match "Shader Cache - Cache Size" } | Select-Object -First 1
+    if (-not $line -or $line -notmatch 'Cache Size\s+([^\s]+)\s+0x([0-9A-F]{8})') {
+        $script:nvidiaShaderCache = "No detectado"
+        return
+    }
+
+    $sizeText = $matches[1]
+    $hexValue = "0x" + $matches[2].ToUpper()
+
+	# === COLOR: VERDE SI ≥10GB o Unlimited, ROJO SI <10GB ===
+	$isGood = ($sizeText -eq "Unlimited") -or ($sizeText -match "GB" -and [int]($sizeText -replace "GB","") -ge 10)
+	$color = if ($isGood) { "Green" } else { "Red" }
+
+    $script:nvidiaShaderCache = [PSCustomObject]@{
+        Line = "Shader Cache -> $sizeText"
+        Color = $color
+        Hex = $hexValue
+        Text = $sizeText
+    }
+}
+
+# === APLICAR CAMBIO (SOLO SET – SIN LOGS) ===
+function Set-NVIDIAShaderCache {
+    param([string]$SizeName)
+
+    $exePath = "$PSScriptRoot\nvidiaProfileInspector.exe"
+    if (-not (Test-Path $exePath)) {
+        Write-Host "`nERROR: nvidiaProfileInspector.exe no encontrado" -ForegroundColor Red
+        return $false
+    }
+
+    $sizes = @{
+        "Off"="0x00000000"; "128MB"="0x00000080"; "256MB"="0x00000100"; "512MB"="0x00000200";
+        "1GB"="0x00000400"; "4GB"="0x00001000"; "5GB"="0x00001400"; "8GB"="0x00002000";
+        "10GB"="0x00002800"; "100GB"="0x00019000"; "Unlimited"="0xFFFFFFFF"
+    }
+
+    if (-not $sizes.ContainsKey($SizeName)) { return $false }
+
+    $hex = $sizes[$SizeName]
+    $cmd = "& `"$exePath`" -p `"Base Profile`" --set `"00AC8497=$hex`""
+    try {
+        Invoke-Expression $cmd | Out-Null
+        Write-Host "`nShader Cache: $SizeName aplicado" -ForegroundColor Green
+        $script:changesMade = $true
+        return $true
+    } catch {
+        Write-Host "`nERROR al aplicar Shader Cache" -ForegroundColor Red
+        return $false
+    }
+}
+
 # === SISTEMA DE LOG VISUAL CENTRALIZADO (COMPATIBLE PS 5.1) ===
 function Log-Progress {
     param(
@@ -881,22 +1043,6 @@ function Show-LoadingProcess {
     Write-Host "# ===================================================================" -ForegroundColor Cyan
     Write-Host "# INICIANDO OPTIMIZADOR DE RENDIMIENTO" -ForegroundColor White
     Write-Host "# ===================================================================" -ForegroundColor Cyan
-
-	if ($script:gpuzInfo -and $script:gpuzInfo.Count -gt 0 -and $script:gpuzInfo[0].Line) {
-		Write-Host "# GPUs DETECTADAS (GPU-Z)" -ForegroundColor Green
-		Write-Host "# -------------------------------------------------------------------" -ForegroundColor Green
-		foreach ($info in $script:gpuzInfo) {
-			if ($info.Line -and $info.Line.Trim() -ne "" -and $info.Line -notmatch "ReBAR:|Conexion actual:") {
-				if ($info.Line -match "^(AMD|NVIDIA|Intel|GeForce|Radeon|Arc)") {
-					Write-Host "# $($info.Line.Trim())" -ForegroundColor White
-				}
-			}
-		}
-		Write-Host "# -------------------------------------------------------------------" -ForegroundColor Green
-	} else {
-		Write-Host "# GPU-Z: No se pudo leer informacion" -ForegroundColor Red
-	}
-
     Write-Host "# CARGA COMPLETADA" -ForegroundColor Cyan
     Write-Host "# ===================================================================`n" -ForegroundColor Cyan
     Start-Sleep -Seconds 2
@@ -1325,18 +1471,25 @@ function Apply-ShaderCacheToAll {
     return $applied
 }
 
-# === LIMPIEZA DE CACHE AMD ===
-function Clear-AMDCache {
-    $cacheBackupPath = "$script:backupPath\AMD_Cache_Backup"
+# === LIMPIEZA DE CACHE GPU (AMD / NVIDIA) ===
+function Clear-GPUCache {
+    param(
+        [ValidateSet("AMD", "NVIDIA")] [string]$Vendor
+    )
+    $cacheBackupPath = "$script:backupPath\$($Vendor)_Cache_Backup"
     New-Item -Path $cacheBackupPath -ItemType Directory -Force | Out-Null
-
     $users = Get-ChildItem "C:\Users" -Directory | Where-Object { $_.Name -notmatch "Public|Default" }
     $totalCopied = 0
-
     foreach ($user in $users) {
-        $amdPath = "$($user.FullName)\AppData\Local\AMD"
-        if (Test-Path $amdPath) {
-            $cacheFolders = Get-ChildItem $amdPath -Directory | Where-Object { $_.Name -match "cache" -and $_.Name -notmatch "Backup" }
+        $vendorPath = if ($Vendor -eq "AMD") {
+            "$($user.FullName)\AppData\Local\AMD"
+        } else {
+            "$($user.FullName)\AppData\Local\NVIDIA"
+        }
+        if (Test-Path $vendorPath) {
+            $cacheFolders = Get-ChildItem $vendorPath -Directory | Where-Object {
+                $_.Name -match "cache" -and $_.Name -notmatch "Backup"
+            }
             foreach ($folder in $cacheFolders) {
                 $dest = "$cacheBackupPath\$($user.Name)_$($folder.Name)"
                 try {
@@ -1347,12 +1500,11 @@ function Clear-AMDCache {
             }
         }
     }
-
     if ($totalCopied -gt 0) {
-        Write-Host "`nCache AMD: $totalCopied carpetas respaldadas y eliminadas" -ForegroundColor Green
-        Write-Host "   Backup: $cacheBackupPath" -ForegroundColor DarkGray
+        Write-Host "`nCache ${Vendor}: $totalCopied carpetas respaldadas y eliminadas" -ForegroundColor Green
+        Write-Host " Backup: $cacheBackupPath" -ForegroundColor DarkGray
     } else {
-        Write-Host "`nNo se encontro cache AMD" -ForegroundColor Yellow
+        Write-Host "`nNo se encontró cache ${Vendor}" -ForegroundColor Yellow
     }
 }
 
@@ -1417,11 +1569,22 @@ function Start-AutoMode {
 			$applied = Apply-ShaderCacheToAll -Value @([byte]0x32, [byte]0x00)
 			Log-Progress "Shader Cache: Siempre Activado (32 00) en $applied GPU(s)" Green
 			Log-Progress "Limpiando caché AMD..." Yellow
-			Clear-AMDCache
+			Clear-GPUCache -Vendor "AMD"
 		} else {
 			Log-Progress "Shader Cache: YA en Siempre Activado" Green
 		}
 	}
+	
+	# === 7. NVIDIA: Shader Cache -> 10GB (NUEVO) ===
+		if ($script:hasNVIDIA) {
+			Write-Host "Aplicando Shader Cache NVIDIA: 10GB..." -ForegroundColor Yellow
+			if (Set-NVIDIAShaderCache -SizeName "10GB") {
+				Write-Host "Limpiando cache NVIDIA..." -ForegroundColor Yellow
+				Clear-GPUCache -Vendor "NVIDIA"
+			} else {
+				Write-Host "ERROR: No se pudo aplicar Shader Cache NVIDIA" -ForegroundColor Red
+			}
+		}
 	
 	# === REFRESCAR ESTADO ===
     Update-Status
@@ -1535,6 +1698,18 @@ function Update-Status {
 	$mouseAccel = Get-MouseAccelStatus
 	$script:mouseAccelEstado = $mouseAccel.Estado
 	$script:mouseAccelColor = $mouseAccel.Color
+	
+	# === NVIDIA SHADER CACHE ===
+	if ($script:hasNVIDIA) {
+		Read-NVIDIAShaderCache  # ← AÑADE ESTO PARA LEER SIEMPRE
+		if ($script:nvidiaShaderCache -and $script:nvidiaShaderCache -is [PSCustomObject]) {
+			$script:estado7 = if ($script:nvidiaShaderCache.Hex -eq "0x00002800") { "10GB" } else { $script:nvidiaShaderCache.Text }
+			$script:valor7 = $script:nvidiaShaderCache.Hex
+		} else {
+			$script:estado7 = "No detectado"
+			$script:valor7 = "N/A"
+		}
+	}
 }
 
 # === DETECCIÓN DINÁMICA DE OPCIONES DE MENÚ ===
@@ -1664,7 +1839,7 @@ function Get-DynamicMenuOptions {
                     }
                     Write-Host "`nShader Cache: Siempre Activado (32 00) en $applied GPU(s)" -ForegroundColor Green
                     Write-Host "Limpiando cache AMD..." -ForegroundColor Yellow
-                    Clear-AMDCache
+                    Clear-GPUCache -Vendor "AMD"
                 }
                 $script:changesMade = $true
                 Start-Sleep -Milliseconds 800
@@ -1672,18 +1847,37 @@ function Get-DynamicMenuOptions {
         }
     }
 
-    # === NVIDIA (placeholder - se activará cuando lo implementes) ===
-    if ($script:hasNVIDIA) {
-        $options += @{
-            Number = $options.Count + 1
-            Key = [string]($options.Count + 1)
-            Text = "NVIDIA: Optimizar (proximamente)"
-            Action = { 
-                Write-Host "`nNVIDIA: Funcionalidad en desarrollo..." -ForegroundColor Cyan
-                Start-Sleep -Seconds 1
-            }
-        }
-    }
+    # === NVIDIA SHADER CACHE (solo si hay NVIDIA y se leyó) ===
+	if ($script:hasNVIDIA -and $script:nvidiaShaderCache -and $script:nvidiaShaderCache -is [PSCustomObject]) {
+		$options += @{
+			Number = $options.Count + 1
+			Key = [string]($options.Count + 1)
+			Text = "NVIDIA: Reducir/Aumentar Shader Cache"
+			Action = {
+				$sizes = @("Off","128MB","256MB","512MB","1GB","4GB","5GB","8GB","10GB","100GB","Unlimited")
+				Write-Host "`nSelecciona tamaño de Shader Cache:" -ForegroundColor Cyan
+				for ($i = 0; $i -lt $sizes.Count; $i++) {
+					$name = $sizes[$i]
+					$color = if ($name -eq "Unlimited" -or ($name -match "GB" -and [int]($name -replace "GB","") -ge 10)) { "Green" } else { "Red" }
+					Write-Host " $($i+1) - $name" -ForegroundColor $color
+				}
+				Write-Host " S - Salir" -ForegroundColor Gray
+
+				do { $choice = (Read-Host "`nElige 1-$($sizes.Count) o S").ToUpper() }
+				while ($choice -notin 1..$sizes.Count -and $choice -ne "S")
+
+				if ($choice -eq "S") { return }
+
+				$selected = $sizes[$choice - 1]
+				if (Set-NVIDIAShaderCache -SizeName $selected) {
+					Write-Host "Limpiando cache NVIDIA..." -ForegroundColor Yellow
+					Clear-GPUCache -Vendor "NVIDIA"
+					Start-Sleep -Seconds 1
+					Read-NVIDIAShaderCache  # ← Solo lee, sin logs
+				}
+			}
+		}
+	}
 
     # Opción Salir (siempre al final)
     $options += @{
@@ -1761,14 +1955,17 @@ function Show-Menu {
         Write-Host ""
     }
 
-    # === NVIDIA (solo si está en menuOptions) ===
-    $nvidiaOption = $script:menuOptions | Where-Object { $_.Text -match "NVIDIA: Optimizar" }
-    if ($nvidiaOption) {
-        Write-Host "$($nvidiaOption.Number). NVIDIA: Optimizar -> " -NoNewline -ForegroundColor White
-        Write-Host "Pendiente" -NoNewline -ForegroundColor Yellow
-        Write-Host " (proximamente)" -ForegroundColor Gray
-        Write-Host ""
-    }
+	# === NVIDIA SHADER CACHE ===
+	$nvidiaOption = $script:menuOptions | Where-Object { $_.Text -match "NVIDIA: Reducir/Aumentar Shader Cache" }
+	if ($nvidiaOption -and $script:nvidiaShaderCache -and $script:nvidiaShaderCache -is [PSCustomObject]) {
+		$color = $script:nvidiaShaderCache.Color
+		Write-Host "$($nvidiaOption.Number). NVIDIA: Shader Cache -> " -NoNewline -ForegroundColor White
+		Write-Host "$($script:nvidiaShaderCache.Text)" -NoNewline -ForegroundColor $color
+		Write-Host " (Recomendado: 10GB)" -ForegroundColor Yellow
+		Write-Host " Aumenta la cache de shaders para reducir stuttering en juegos" -ForegroundColor Gray
+		Write-Host " 10GB = ideal para 8GB+ VRAM | Usa menos en GPUs con poca VRAM" -ForegroundColor Gray
+		Write-Host ""
+	}
 
     # === INFO HARDWARE ===
     Write-Host "INFO Placa Base:" -ForegroundColor Cyan
@@ -1865,6 +2062,7 @@ Update-BatchFile
 Update-CPUZInfo
 Update-GPUZInfo
 GPU-CheckGPUZorRegister
+Initialize-NVIDIAInspector
 Show-LoadingProcess
 Clear-Host
 
