@@ -142,6 +142,22 @@ function RegistersBackup {
     $script:backupInfo = if ($backupFiles.Count -eq 3) { "Backup OK: $backupPath" } else { "Backup PARCIAL: $backupPath" }
 }
 
+# === COMPROBAR SI HUBO REINICIO DESDE ÚLTIMA EJECUCIÓN ===
+function Test-RebootSinceLastRun {
+    $lastBackup = Get-ChildItem "C:\Temp\Backup_Registros" -ErrorAction SilentlyContinue | 
+                  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+    if (-not $lastBackup) { return $false }
+
+    # Última vez que se modificó un backup
+    $lastBackupTime = $lastBackup.LastWriteTime
+
+    # Hora de arranque del sistema
+    $bootTime = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+
+    return $bootTime -gt $lastBackupTime
+}
+
 # === GENERAR Y LEER TXT DE CPU-Z (XMP + RAM + PLACA BASE) ===
 function Update-CPUZInfo {
     try {
@@ -152,191 +168,203 @@ function Update-CPUZInfo {
         $exePath = "$scriptPath\cpuz_x64.exe"
         $txtPath = "$scriptPath\meminfo.txt"
 
-        # === DESCARGAR Y EXTRAER CPU-Z ===
-        if (-not (Test-Path $exePath)) {
-            Log-Progress "Descargando CPU-Z..." Yellow
-            try {
-                Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 30
-                Log-Progress "Extrayendo CPU-Z..." Yellow
-                $shell = New-Object -ComObject Shell.Application
-                $zip = $shell.NameSpace($zipPath)
-                foreach ($item in $zip.Items()) { $shell.NameSpace($scriptPath).CopyHere($item, 0x14) }
-                Remove-Item $zipPath -Force
-                Start-Sleep -Milliseconds 300
-                if (-not (Test-Path $exePath)) { throw "No se encontro cpuz_x64.exe" }
-                Log-Progress "CPU-Z descargado y extraido correctamente." Green
-            } catch {
-                $script:cpuzInfo = "Error al descargar CPU-Z"
-                $script:motherboard = "No disponible"
-                $script:xmpAdvice = $null
-                Log-Progress "ERROR: $($_.Exception.Message)" Red -Error
-                return
+		# === OPTIMIZACIÓN: REUTILIZAR SI NO HUBO REINICIO ===
+        $skipGeneration = $false
+        if (-not (Test-RebootSinceLastRun) -and (Test-Path $txtPath)) {
+            $fileAge = (Get-Date) - (Get-Item $txtPath).LastWriteTime
+            if ($fileAge.TotalHours -lt 48) {
+                Log-Progress "# Reutilizando meminfo.txt existente" Green -Subsection
+                $skipGeneration = $true
             }
         }
 
-        # === INICIO CPU-Z ===
-        Log-Progress "# INICIANDO CPU-Z" Cyan -Subsection
-        Log-Progress "# ----------------------------------------------------" Gray -Subsection
-
-		# === EJECUTAR CPU-Z ===
-		Log-Progress "# Ejecutando CPU-Z..." Cyan -Subsection
-		if (Test-Path $txtPath) { Remove-Item $txtPath -Force }
-
-		# Ejecutar CPU-Z
-		$process = Start-Process -FilePath $exePath -ArgumentList "-txt=meminfo.txt" -WorkingDirectory $scriptPath -PassThru -WindowStyle Hidden
-		if (-not $process) {
-			$script:cpuzInfo = "Error: No se pudo iniciar CPU-Z"
-			$script:motherboard = "No disponible"
-			Log-Progress "$script:cpuzInfo" Red -Error
-			return
-		}
-
-		Log-Progress "# GENERANDO MEMINFO.TXT" Yellow -Subsection
-
-		# === ESPERA PACIENTE SIN FORZAR CIERRE ===
-		$maxWait = 60  # Aumentado a 60 segundos para PCs viejos
-		$txtReady = $false
-		$fileDetected = $false
-
-		for ($i = 0; $i -lt $maxWait; $i++) {
-			Start-Sleep -Seconds 1
-			
-			# === GESTIÓN DE NOMBRES DE ARCHIVO ===
-			$actualTxtPath = $txtPath
-			
-			# Verificar diferentes nombres que CPU-Z puede generar
-			$possibleNames = @(
-				$txtPath,                    # meminfo.txt
-				"$txtPath.txt",              # meminfo.txt.txt  
-				"meminfo",                   # meminfo (sin extensión)
-				"meminfo.txt.tmp"            # Temporal
-			)
-			
-			foreach ($possibleFile in $possibleNames) {
-				if (Test-Path $possibleFile) {
-					if ($possibleFile -ne $txtPath) {
-						#Log-Progress "# RENOMBRANDO: $possibleFile -> meminfo.txt" Yellow -Subsection
-						try {
-							Rename-Item $possibleFile "meminfo.txt" -Force -ErrorAction Stop
-							$actualTxtPath = $txtPath
-							Log-Progress "# Archivo renombrado correctamente" Green -Subsection
-							break
-						} catch {
-							Log-Progress "# Archivo en uso, esperando..." DarkGray -Subsection
-						}
-					} else {
-						$actualTxtPath = $txtPath
-						break
-					}
-				}
-			}
-			
-			# Verificar si el archivo existe
-			if (Test-Path $actualTxtPath) {
-				$fileDetected = $true
-				
+		if (-not $skipGeneration) {
+			# === DESCARGAR Y EXTRAER CPU-Z ===
+			if (-not (Test-Path $exePath)) {
+				Log-Progress "Descargando CPU-Z..." Yellow
 				try {
-					$fileInfo = Get-Item $actualTxtPath -ErrorAction Stop
-					$fileSize = $fileInfo.Length
-					
-					# El archivo debe tener al menos 1KB para ser útil
-					if ($fileSize -gt 1024) {
-						# Verificar que el archivo no esté bloqueado
-						$fileStream = $null
-						try {
-							$fileStream = [System.IO.File]::Open($actualTxtPath, 'Open', 'Read', 'None')
-							$fileStream.Close()
-							
-							# Intentar leer el contenido
-							$testContent = Get-Content $actualTxtPath -Raw -ErrorAction Stop
-							if ($testContent -and $testContent.Length -gt 1000) {
-								# Verificar que tenga contenido crítico
-								if ($testContent -match "DMI Baseboard" -and $testContent -match "Memory") {
-									$txtReady = $true
-									Log-Progress "# TXT VALIDO DETECTADO ($i segundos, $fileSize bytes)" Green -Subsection
-									
-									# CPU-Z terminó exitosamente, podemos cerrarlo amablemente
-									if (-not $process.HasExited) {
-										Log-Progress "# Cerrando CPU-Z..." DarkGray -Subsection
-										$process.CloseMainWindow() | Out-Null
-										Start-Sleep -Milliseconds 500
-										if (-not $process.HasExited) {
-											$process.Kill()
-										}
-									}
-									break
-								} else {
-									if ($i % 5 -eq 0) {
-										Log-Progress "# Generando informe... ($i segundos)" DarkGray -Subsection
-									}
-								}
-							}
-						} catch {
-							# Archivo bloqueado - CPU-Z todavía escribiendo
-							if ($i % 5 -eq 0) {
-								Log-Progress "# CPU-Z escribiendo archivo... ($i segundos)" DarkGray -Subsection
-							}
-						} finally {
-							if ($fileStream) { $fileStream.Close() }
-						}
-					} else {
-						# Archivo existe pero es muy pequeño
-						if ($i % 5 -eq 0) {
-							Log-Progress "# Iniciando generacion... ($fileSize bytes)" DarkGray -Subsection
-						}
-					}
+					Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 30
+					Log-Progress "Extrayendo CPU-Z..." Yellow
+					$shell = New-Object -ComObject Shell.Application
+					$zip = $shell.NameSpace($zipPath)
+					foreach ($item in $zip.Items()) { $shell.NameSpace($scriptPath).CopyHere($item, 0x14) }
+					Remove-Item $zipPath -Force
+					Start-Sleep -Milliseconds 300
+					if (-not (Test-Path $exePath)) { throw "No se encontro cpuz_x64.exe" }
+					Log-Progress "CPU-Z descargado y extraido correctamente." Green
 				} catch {
-					# Error accediendo al archivo
-					if ($i % 5 -eq 0) {
-						Log-Progress "# Preparando archivo... ($i segundos)" DarkGray -Subsection
-					}
-				}
-			} else {
-				# Archivo aún no existe
-				if ($i % 5 -eq 0) {
-					Log-Progress "# Iniciando CPU-Z... ($i/$maxWait segundos)" DarkGray -Subsection
+					$script:cpuzInfo = "Error al descargar CPU-Z"
+					$script:motherboard = "No disponible"
+					$script:xmpAdvice = $null
+					Log-Progress "ERROR: $($_.Exception.Message)" Red -Error
+					return
 				}
 			}
-			
-			# Feedback progresivo para PCs viejos
-			if ($i -eq 15) {
-				Log-Progress "# CPU-Z esta trabajando... (paciencia en PCs viejos)" Yellow -Subsection
-			}
-			elseif ($i -eq 30) {
-				Log-Progress "# CPU-Z esta recopilando mucha informacion..." Yellow -Subsection
-			}
-		}
 
-		# === VERIFICAR RESULTADO ===
-		if (-not $txtReady) {
-			# Solo forzar cierre si realmente es necesario (timeout completo)
-			if (-not $process.HasExited) {
-				Log-Progress "# CPU-Z tardo demasiado, cerrando..." Yellow -Subsection
-				$process.CloseMainWindow() | Out-Null
-				Start-Sleep -Seconds 2
-				if (-not $process.HasExited) {
-					$process.Kill()
-				}
-			}
-			
-			# Intentar usar el TXT aunque esté incompleto
-			if (Test-Path $txtPath -and (Get-Item $txtPath).Length -gt 500) {
-				try {
-					$testContent = Get-Content $txtPath -Raw -ErrorAction Stop
-					if ($testContent -and $testContent.Length -gt 500) {
-						Log-Progress "# Usando TXT parcialmente generado" Yellow -Subsection
-						$txtReady = $true
-					}
-				} catch {
-					# No se pudo usar el TXT
-				}
-			}
-			
-			if (-not $txtReady) {
-				$script:cpuzInfo = "CPU-Z no genero un TXT valido (timeout de $maxWait segundos)"
+			# === INICIO CPU-Z ===
+			Log-Progress "# INICIANDO CPU-Z" Cyan -Subsection
+			Log-Progress "# ----------------------------------------------------" Gray -Subsection
+
+			# === EJECUTAR CPU-Z ===
+			Log-Progress "# Ejecutando CPU-Z..." Cyan -Subsection
+			if (Test-Path $txtPath) { Remove-Item $txtPath -Force }
+
+			# Ejecutar CPU-Z
+			$process = Start-Process -FilePath $exePath -ArgumentList "-txt=meminfo.txt" -WorkingDirectory $scriptPath -PassThru -WindowStyle Hidden
+			if (-not $process) {
+				$script:cpuzInfo = "Error: No se pudo iniciar CPU-Z"
 				$script:motherboard = "No disponible"
 				Log-Progress "$script:cpuzInfo" Red -Error
 				return
+			}
+
+			Log-Progress "# GENERANDO MEMINFO.TXT" Yellow -Subsection
+
+			# === ESPERA PACIENTE SIN FORZAR CIERRE ===
+			$maxWait = 60  # Aumentado a 60 segundos para PCs viejos
+			$txtReady = $false
+			$fileDetected = $false
+
+			for ($i = 0; $i -lt $maxWait; $i++) {
+				Start-Sleep -Seconds 1
+				
+				# === GESTIÓN DE NOMBRES DE ARCHIVO ===
+				$actualTxtPath = $txtPath
+				
+				# Verificar diferentes nombres que CPU-Z puede generar
+				$possibleNames = @(
+					$txtPath,                    # meminfo.txt
+					"$txtPath.txt",              # meminfo.txt.txt  
+					"meminfo",                   # meminfo (sin extensión)
+					"meminfo.txt.tmp"            # Temporal
+				)
+				
+				foreach ($possibleFile in $possibleNames) {
+					if (Test-Path $possibleFile) {
+						if ($possibleFile -ne $txtPath) {
+							#Log-Progress "# RENOMBRANDO: $possibleFile -> meminfo.txt" Yellow -Subsection
+							try {
+								Rename-Item $possibleFile "meminfo.txt" -Force -ErrorAction Stop
+								$actualTxtPath = $txtPath
+								Log-Progress "# Archivo renombrado correctamente" Green -Subsection
+								break
+							} catch {
+								Log-Progress "# Archivo en uso, esperando..." DarkGray -Subsection
+							}
+						} else {
+							$actualTxtPath = $txtPath
+							break
+						}
+					}
+				}
+				
+				# Verificar si el archivo existe
+				if (Test-Path $actualTxtPath) {
+					$fileDetected = $true
+					
+					try {
+						$fileInfo = Get-Item $actualTxtPath -ErrorAction Stop
+						$fileSize = $fileInfo.Length
+						
+						# El archivo debe tener al menos 1KB para ser útil
+						if ($fileSize -gt 1024) {
+							# Verificar que el archivo no esté bloqueado
+							$fileStream = $null
+							try {
+								$fileStream = [System.IO.File]::Open($actualTxtPath, 'Open', 'Read', 'None')
+								$fileStream.Close()
+								
+								# Intentar leer el contenido
+								$testContent = Get-Content $actualTxtPath -Raw -ErrorAction Stop
+								if ($testContent -and $testContent.Length -gt 1000) {
+									# Verificar que tenga contenido crítico
+									if ($testContent -match "DMI Baseboard" -and $testContent -match "Memory") {
+										$txtReady = $true
+										Log-Progress "# TXT VALIDO DETECTADO ($i segundos, $fileSize bytes)" Green -Subsection
+										
+										# CPU-Z terminó exitosamente, podemos cerrarlo amablemente
+										if (-not $process.HasExited) {
+											Log-Progress "# Cerrando CPU-Z..." DarkGray -Subsection
+											$process.CloseMainWindow() | Out-Null
+											Start-Sleep -Milliseconds 500
+											if (-not $process.HasExited) {
+												$process.Kill()
+											}
+										}
+										break
+									} else {
+										if ($i % 5 -eq 0) {
+											Log-Progress "# Generando informe... ($i segundos)" DarkGray -Subsection
+										}
+									}
+								}
+							} catch {
+								# Archivo bloqueado - CPU-Z todavía escribiendo
+								if ($i % 5 -eq 0) {
+									Log-Progress "# CPU-Z escribiendo archivo... ($i segundos)" DarkGray -Subsection
+								}
+							} finally {
+								if ($fileStream) { $fileStream.Close() }
+							}
+						} else {
+							# Archivo existe pero es muy pequeño
+							if ($i % 5 -eq 0) {
+								Log-Progress "# Iniciando generacion... ($fileSize bytes)" DarkGray -Subsection
+							}
+						}
+					} catch {
+						# Error accediendo al archivo
+						if ($i % 5 -eq 0) {
+							Log-Progress "# Preparando archivo... ($i segundos)" DarkGray -Subsection
+						}
+					}
+				} else {
+					# Archivo aún no existe
+					if ($i % 5 -eq 0) {
+						Log-Progress "# Iniciando CPU-Z... ($i/$maxWait segundos)" DarkGray -Subsection
+					}
+				}
+				
+				# Feedback progresivo para PCs viejos
+				if ($i -eq 15) {
+					Log-Progress "# CPU-Z esta trabajando... (paciencia en PCs viejos)" Yellow -Subsection
+				}
+				elseif ($i -eq 30) {
+					Log-Progress "# CPU-Z esta recopilando mucha informacion..." Yellow -Subsection
+				}
+			}
+
+			# === VERIFICAR RESULTADO ===
+			if (-not $txtReady) {
+				# Solo forzar cierre si realmente es necesario (timeout completo)
+				if (-not $process.HasExited) {
+					Log-Progress "# CPU-Z tardo demasiado, cerrando..." Yellow -Subsection
+					$process.CloseMainWindow() | Out-Null
+					Start-Sleep -Seconds 2
+					if (-not $process.HasExited) {
+						$process.Kill()
+					}
+				}
+				
+				# Intentar usar el TXT aunque esté incompleto
+				if (Test-Path $txtPath -and (Get-Item $txtPath).Length -gt 500) {
+					try {
+						$testContent = Get-Content $txtPath -Raw -ErrorAction Stop
+						if ($testContent -and $testContent.Length -gt 500) {
+							Log-Progress "# Usando TXT parcialmente generado" Yellow -Subsection
+							$txtReady = $true
+						}
+					} catch {
+						# No se pudo usar el TXT
+					}
+				}
+				
+				if (-not $txtReady) {
+					$script:cpuzInfo = "CPU-Z no genero un TXT valido (timeout de $maxWait segundos)"
+					$script:motherboard = "No disponible"
+					Log-Progress "$script:cpuzInfo" Red -Error
+					return
+				}
 			}
 		}
 
@@ -458,180 +486,191 @@ function Update-GPUZInfo {
         $xmlPath = "$scriptPath\gpuz.xml"
         $zipUrl = "https://ftp.nluug.nl/pub/games/PC/guru3d/generic/GPU-Z-[Guru3D.com].zip"
         $zipPath = "$scriptPath\gpuz_temp.zip"
-
-        # === DESCARGAR Y EXTRAER GPU-Z ===
-        if (-not (Test-Path $gpuzPath)) {
-            Log-Progress "Descargando GPU-Z..." Yellow
-            try {
-                Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 30
-                if (-not (Test-Path $zipPath)) { throw "ZIP no se descargo." }
-                Log-Progress "Extrayendo GPU-Z..." Yellow
-                $tempExtract = "$scriptPath\gpuz_extract"
-                if (Test-Path $tempExtract) { Remove-Item $tempExtract -Recurse -Force }
-                
-                # === EXTRAER ZIP CON FALLBACK ===
-                try {
-                    Expand-Archive -Path $zipPath -DestinationPath $tempExtract -Force -ErrorAction Stop
-                    Log-Progress "Extrayendo GPU-Z con Expand-Archive..." Yellow
-                } catch {
-                    Log-Progress "Expand-Archive no disponible, usando metodo COM..." Yellow
-                    $shell = New-Object -ComObject Shell.Application
-                    $zip = $shell.NameSpace($zipPath)
-                    foreach ($item in $zip.Items()) {
-                        $shell.NameSpace($tempExtract).CopyHere($item, 0x14)
-                    }
-                }
-                
-                $exeFile = Get-ChildItem -Path $tempExtract -Filter "GPU-Z.*.exe" -Recurse | Select-Object -First 1
-                if (-not $exeFile) { throw "No se encontro GPU-Z.*.exe en el ZIP" }
-                Move-Item $exeFile.FullName $gpuzPath -Force
-                Remove-Item $tempExtract -Recurse -Force
-                Remove-Item $zipPath -Force
-                Log-Progress "GPU-Z descargado y extraido correctamente." Green
-            }
-            catch {
-                $script:gpuzInfo = "Error al descargar/extraer GPU-Z: $($_.Exception.Message)"
-                Log-Progress "$script:gpuzInfo" Red -Error
-                return
+		
+		$skipGeneration = $false
+        if (-not (Test-RebootSinceLastRun) -and (Test-Path $xmlPath)) {
+            $fileAge = (Get-Date) - (Get-Item $xmlPath).LastWriteTime
+            if ($fileAge.TotalHours -lt 48) {
+                Log-Progress "# Reutilizando gpuz.xml existente" Green -Subsection
+                $skipGeneration = $true
             }
         }
 
-        # === INICIO GPU-Z ===
-        Log-Progress "# INICIANDO GPU-Z" Cyan -Subsection
-        Log-Progress "# ----------------------------------------------------" Gray -Subsection
+		if (-not $skipGeneration) {
+			# === DESCARGAR Y EXTRAER GPU-Z ===
+			if (-not (Test-Path $gpuzPath)) {
+				Log-Progress "Descargando GPU-Z..." Yellow
+				try {
+					Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 30
+					if (-not (Test-Path $zipPath)) { throw "ZIP no se descargo." }
+					Log-Progress "Extrayendo GPU-Z..." Yellow
+					$tempExtract = "$scriptPath\gpuz_extract"
+					if (Test-Path $tempExtract) { Remove-Item $tempExtract -Recurse -Force }
+					
+					# === EXTRAER ZIP CON FALLBACK ===
+					try {
+						Expand-Archive -Path $zipPath -DestinationPath $tempExtract -Force -ErrorAction Stop
+						Log-Progress "Extrayendo GPU-Z con Expand-Archive..." Yellow
+					} catch {
+						Log-Progress "Expand-Archive no disponible, usando metodo COM..." Yellow
+						$shell = New-Object -ComObject Shell.Application
+						$zip = $shell.NameSpace($zipPath)
+						foreach ($item in $zip.Items()) {
+							$shell.NameSpace($tempExtract).CopyHere($item, 0x14)
+						}
+					}
+					
+					$exeFile = Get-ChildItem -Path $tempExtract -Filter "GPU-Z.*.exe" -Recurse | Select-Object -First 1
+					if (-not $exeFile) { throw "No se encontro GPU-Z.*.exe en el ZIP" }
+					Move-Item $exeFile.FullName $gpuzPath -Force
+					Remove-Item $tempExtract -Recurse -Force
+					Remove-Item $zipPath -Force
+					Log-Progress "GPU-Z descargado y extraido correctamente." Green
+				}
+				catch {
+					$script:gpuzInfo = "Error al descargar/extraer GPU-Z: $($_.Exception.Message)"
+					Log-Progress "$script:gpuzInfo" Red -Error
+					return
+				}
+			}
 
-        # === EJECUTAR GPU-Z ===
-        Log-Progress "# Ejecutando GPU-Z..." Cyan -Subsection
-        if (Test-Path $xmlPath) { Remove-Item $xmlPath -Force }
-        
-        $process = Start-Process -FilePath $gpuzPath -ArgumentList "-dump `"$xmlPath`"" -PassThru -WindowStyle Hidden
-        if (-not $process) {
-            $script:gpuzInfo = "Error: No se pudo iniciar GPU-Z"
-            Log-Progress "$script:gpuzInfo" Red -Error
-            return
-        }
+			# === INICIO GPU-Z ===
+			Log-Progress "# INICIANDO GPU-Z" Cyan -Subsection
+			Log-Progress "# ----------------------------------------------------" Gray -Subsection
 
-        Log-Progress "# GENERANDO GPUZ.XML" Yellow -Subsection
+			# === EJECUTAR GPU-Z ===
+			Log-Progress "# Ejecutando GPU-Z..." Cyan -Subsection
+			if (Test-Path $xmlPath) { Remove-Item $xmlPath -Force }
+			
+			$process = Start-Process -FilePath $gpuzPath -ArgumentList "-dump `"$xmlPath`"" -PassThru -WindowStyle Hidden
+			if (-not $process) {
+				$script:gpuzInfo = "Error: No se pudo iniciar GPU-Z"
+				Log-Progress "$script:gpuzInfo" Red -Error
+				return
+			}
 
-        # === ESPERA MEJORADA: HASTA </gpuz_dump> ===
-        $maxWait = 60
-        $xmlReady = $false
-        $lastSize = 0
-        $stableCount = 0
+			Log-Progress "# GENERANDO GPUZ.XML" Yellow -Subsection
 
-        for ($i = 0; $i -lt $maxWait; $i++) {
-            Start-Sleep -Seconds 1
+			# === ESPERA MEJORADA: HASTA </gpuz_dump> ===
+			$maxWait = 60
+			$xmlReady = $false
+			$lastSize = 0
+			$stableCount = 0
 
-            # === VERIFICAR SI EL ARCHIVO EXISTE ===
-            if (-not (Test-Path $xmlPath)) {
-                if ($i % 5 -eq 0) {
-                    Log-Progress "# Esperando generacion de XML... ($i/$maxWait segundos)" DarkGray -Subsection
-                }
-                continue
-            }
+			for ($i = 0; $i -lt $maxWait; $i++) {
+				Start-Sleep -Seconds 1
 
-            $fileSize = (Get-Item $xmlPath).Length
+				# === VERIFICAR SI EL ARCHIVO EXISTE ===
+				if (-not (Test-Path $xmlPath)) {
+					if ($i % 5 -eq 0) {
+						Log-Progress "# Esperando generacion de XML... ($i/$maxWait segundos)" DarkGray -Subsection
+					}
+					continue
+				}
 
-            # === VERIFICAR SI EL ARCHIVO TERMINA CON </gpuz_dump> ===
-            try {
-                # Usar StreamReader para evitar problemas de bloqueo
-                $reader = [System.IO.StreamReader]::new($xmlPath)
-                $content = $reader.ReadToEnd()
-                $reader.Close()
+				$fileSize = (Get-Item $xmlPath).Length
 
-                if ($content -match '</gpuz_dump>\s*$') {
-                    Log-Progress "# XML COMPLETO: </gpuz_dump> detectado ($i segundos, $fileSize bytes)" Green -Subsection
+				# === VERIFICAR SI EL ARCHIVO TERMINA CON </gpuz_dump> ===
+				try {
+					# Usar StreamReader para evitar problemas de bloqueo
+					$reader = [System.IO.StreamReader]::new($xmlPath)
+					$content = $reader.ReadToEnd()
+					$reader.Close()
 
-                    # Validar XML
-                    try {
-                        [xml]$xmlDoc = $content
+					if ($content -match '</gpuz_dump>\s*$') {
+						Log-Progress "# XML COMPLETO: </gpuz_dump> detectado ($i segundos, $fileSize bytes)" Green -Subsection
 
-                        if ($null -eq $xmlDoc.gpuz_dump -or $null -eq $xmlDoc.gpuz_dump.card) {
-                            Log-Progress "# XML completo pero sin datos de GPU" Yellow -Subsection
-                            continue
-                        }
+						# Validar XML
+						try {
+							[xml]$xmlDoc = $content
 
-                        $valid = $false
-                        foreach ($c in $xmlDoc.gpuz_dump.card) {
-                            if (-not [string]::IsNullOrWhiteSpace($c.cardname)) {
-                                $valid = $true
-                                break
-                            }
-                        }
-                        if (-not $valid) {
-                            Log-Progress "# XML sin nombre de GPU valido" Yellow -Subsection
-                            continue
-                        }
+							if ($null -eq $xmlDoc.gpuz_dump -or $null -eq $xmlDoc.gpuz_dump.card) {
+								Log-Progress "# XML completo pero sin datos de GPU" Yellow -Subsection
+								continue
+							}
 
-                        $xmlReady = $true
-                        Log-Progress "# XML VALIDO Y COMPLETO" Green -Subsection
+							$valid = $false
+							foreach ($c in $xmlDoc.gpuz_dump.card) {
+								if (-not [string]::IsNullOrWhiteSpace($c.cardname)) {
+									$valid = $true
+									break
+								}
+							}
+							if (-not $valid) {
+								Log-Progress "# XML sin nombre de GPU valido" Yellow -Subsection
+								continue
+							}
 
-                        # Cerrar GPU-Z limpiamente
-                        if (-not $process.HasExited) {
-                            Log-Progress "# Cerrando GPU-Z..." DarkGray -Subsection
-                            $process.CloseMainWindow() | Out-Null
-                            Start-Sleep -Milliseconds 500
-                            if (-not $process.HasExited) { 
-                                $process.Kill()
-                                Start-Sleep -Milliseconds 300
-                            }
-                        }
-                        break
+							$xmlReady = $true
+							Log-Progress "# XML VALIDO Y COMPLETO" Green -Subsection
 
-                    } catch {
-                        Log-Progress "# Error parseando XML completo: $($_.Exception.Message)" Red -Subsection
-                    }
-                }
-                else {
-                    # Aún no termina
-                    if ($fileSize -eq $lastSize) {
-                        $stableCount++
-                        if ($stableCount -gt 5 -and $fileSize -gt 2048) {
-                            Log-Progress "# Archivo estable pero sin cierre. Forzando lectura..." Yellow -Subsection
-                            # Intentar parsear de todos modos
-                            try {
-                                if ($content -match '<cardname>' -and $content.Length -gt 1000) {
-                                    [xml]$xmlDoc = $content
-                                    if ($xmlDoc.gpuz_dump.card) {
-                                        $xmlReady = $true
-                                        Log-Progress "# XML parcial pero usable" Yellow -Subsection
-                                        if (-not $process.HasExited) { 
-                                            $process.Kill()
-                                            Start-Sleep -Milliseconds 300
-                                        }
-                                        break
-                                    }
-                                }
-                            } catch {
-                                Log-Progress "# Error parseando XML parcial: $($_.Exception.Message)" Red -Subsection
-                            }
-                        }
-                    } else {
-                        $stableCount = 0
-                        $lastSize = $fileSize
-                    }
+							# Cerrar GPU-Z limpiamente
+							if (-not $process.HasExited) {
+								Log-Progress "# Cerrando GPU-Z..." DarkGray -Subsection
+								$process.CloseMainWindow() | Out-Null
+								Start-Sleep -Milliseconds 500
+								if (-not $process.HasExited) { 
+									$process.Kill()
+									Start-Sleep -Milliseconds 300
+								}
+							}
+							break
 
-                    if ($i % 5 -eq 0) {
-                        Log-Progress "# GPU-Z escribiendo... ($fileSize bytes, esperando </gpuz_dump>)" DarkGray -Subsection
-                    }
-                }
-            } catch {
-                if ($i % 5 -eq 0) {
-                    Log-Progress "# Leyendo archivo... ($i segundos)" DarkGray -Subsection
-                }
-            }
-        }
+						} catch {
+							Log-Progress "# Error parseando XML completo: $($_.Exception.Message)" Red -Subsection
+						}
+					}
+					else {
+						# Aún no termina
+						if ($fileSize -eq $lastSize) {
+							$stableCount++
+							if ($stableCount -gt 5 -and $fileSize -gt 2048) {
+								Log-Progress "# Archivo estable pero sin cierre. Forzando lectura..." Yellow -Subsection
+								# Intentar parsear de todos modos
+								try {
+									if ($content -match '<cardname>' -and $content.Length -gt 1000) {
+										[xml]$xmlDoc = $content
+										if ($xmlDoc.gpuz_dump.card) {
+											$xmlReady = $true
+											Log-Progress "# XML parcial pero usable" Yellow -Subsection
+											if (-not $process.HasExited) { 
+												$process.Kill()
+												Start-Sleep -Milliseconds 300
+											}
+											break
+										}
+									}
+								} catch {
+									Log-Progress "# Error parseando XML parcial: $($_.Exception.Message)" Red -Subsection
+								}
+							}
+						} else {
+							$stableCount = 0
+							$lastSize = $fileSize
+						}
 
-        # === SI NO SE PUDO LEER EL XML ===
-        if (-not $xmlReady) {
-            if (-not $process.HasExited) {
-                $process.Kill()
-                Start-Sleep -Milliseconds 300
-            }
-            $script:gpuzInfo = "Error: No se pudo generar XML valido de GPU-Z"
-            Log-Progress "$script:gpuzInfo" Red -Error
-            return
-        }
+						if ($i % 5 -eq 0) {
+							Log-Progress "# GPU-Z escribiendo... ($fileSize bytes, esperando </gpuz_dump>)" DarkGray -Subsection
+						}
+					}
+				} catch {
+					if ($i % 5 -eq 0) {
+						Log-Progress "# Leyendo archivo... ($i segundos)" DarkGray -Subsection
+					}
+				}
+			}
+
+			# === SI NO SE PUDO LEER EL XML ===
+			if (-not $xmlReady) {
+				if (-not $process.HasExited) {
+					$process.Kill()
+					Start-Sleep -Milliseconds 300
+				}
+				$script:gpuzInfo = "Error: No se pudo generar XML valido de GPU-Z"
+				Log-Progress "$script:gpuzInfo" Red -Error
+				return
+			}
+		}
 
         Log-Progress "# PROCESANDO INFORMACION DE GPU..." Yellow -Subsection
 
@@ -769,14 +808,16 @@ function Update-GPUZInfo {
             if ($script:gpuzInfo.Count -gt 0 -and $script:gpuzInfo[-1].Line -eq "") {
                 $script:gpuzInfo = $script:gpuzInfo[0..($script:gpuzInfo.Count-2)]
             }
-            # === CONSEJO REBAR MEJORADO ===
-            $script:rebarYoutube = $null
-            $rebarOff = $script:gpuzInfo | Where-Object { $_.Line -match "ReBAR: Desactivado" }
-            if ($rebarOff) {
-                $cleanName = ($script:motherboard -split " ")[0..1] -join " "
-                $cleanName = $cleanName -replace '\s*\([^)]*\)', '' -replace '\s+$', ''
-                $script:rebarYoutube = "$cleanName enable Resizable BAR"
-            }
+			# === CONSEJO REBAR MEJORADO ===
+			$script:rebarYoutube = $null
+			$rebarOff = $script:gpuzInfo | Where-Object { $_.Line -match "ReBAR: Desactivado" }
+			if ($rebarOff -and $script:motherboard -and $script:motherboard -notmatch "Desconocido|No disponible") {
+				# Usar el nombre completo que ya detectó CPU-Z
+				$cleanName = $script:motherboard.Trim()
+				# Solo quitar paréntesis si los hay y espacios sobrantes
+				$cleanName = $cleanName -replace '\s*\([^)]*\)', '' -replace '\s+$', ''
+				$script:rebarYoutube = "$cleanName enable Resizable BAR"
+			}
             # === FINAL GPU-Z ===
             Log-Progress "# ----------------------------------------------------" Gray -Subsection
             Log-Progress "# GPU-Z: INFORMACION LEIDA CORRECTAMENTE" Green -Subsection
@@ -859,7 +900,7 @@ function GPU-CheckGPUZorRegister {
 	Log-Progress "GPU Detectada: AMD=$script:hasAMD | NVIDIA=$script:hasNVIDIA" Cyan
 }
 
-# === INICIALIZAR (DESCARGA + PRIMERA LECTURA – CON LOGS) ===
+# === DESCARGA + PRIMERA LECTURA - NVIDIA INSPECTOR ===
 function Initialize-NVIDIAInspector {
     if (-not $script:hasNVIDIA) {
         $script:nvidiaShaderCache = "No NVIDIA"
@@ -941,7 +982,7 @@ function Initialize-NVIDIAInspector {
     }
 }
 
-# === LEER SHADER CACHE (SOLO LECTURA – SIN LOGS) ===
+# === LEER NVIDIA SHADER CACHE ===
 function Read-NVIDIAShaderCache {
     $exePath = "$PSScriptRoot\nvidiaProfileInspector.exe"
     if (-not (Test-Path $exePath)) {
@@ -978,10 +1019,9 @@ function Read-NVIDIAShaderCache {
     }
 }
 
-# === APLICAR CAMBIO (SOLO SET – SIN LOGS) ===
+# === APLICAR NVIDIA SHADER CACHE ===
 function Set-NVIDIAShaderCache {
     param([string]$SizeName)
-
     $exePath = "$PSScriptRoot\nvidiaProfileInspector.exe"
     if (-not (Test-Path $exePath)) {
         Write-Host "`nERROR: nvidiaProfileInspector.exe no encontrado" -ForegroundColor Red
@@ -993,18 +1033,28 @@ function Set-NVIDIAShaderCache {
         "1GB"="0x00000400"; "4GB"="0x00001000"; "5GB"="0x00001400"; "8GB"="0x00002000";
         "10GB"="0x00002800"; "100GB"="0x00019000"; "Unlimited"="0xFFFFFFFF"
     }
-
     if (-not $sizes.ContainsKey($SizeName)) { return $false }
 
-    $hex = $sizes[$SizeName]
-    $cmd = "& `"$exePath`" -p `"Base Profile`" --set `"00AC8497=$hex`""
+    $desiredHex = $sizes[$SizeName]
+
+    # === LEER VALOR ACTUAL ===
+    Read-NVIDIAShaderCache
+
+    # === 10GB, 100GB y Unlimited se consideran "igual o mejor" → no tocar ===
+    if ($script:nvidiaShaderCache.Text -in @("10GB", "100GB", "Unlimited")) {
+        Write-Host "`nShader Cache NVIDIA: YA esta en $($script:nvidiaShaderCache.Text) (10GB o superior)" -ForegroundColor Gray
+        return $false
+    }
+
+    # === SI LLEGA AQUÍ → SÍ HAY QUE CAMBIAR ===
+    $cmd = "& `"$exePath`" -p `"Base Profile`" --set `"00AC8497=$desiredHex`""
     try {
         Invoke-Expression $cmd | Out-Null
         Write-Host "`nShader Cache: $SizeName aplicado" -ForegroundColor Green
         $script:changesMade = $true
         return $true
     } catch {
-        Write-Host "`nERROR al aplicar Shader Cache" -ForegroundColor Red
+        Write-Host "`nERROR al aplicar Shader Cache NVIDIA" -ForegroundColor Red
         return $false
     }
 }
@@ -1073,26 +1123,25 @@ function Get-PowerPlans {
 
 # === GESTIONAR MODO MAXIMO RENDIMIENTO (CON LIMPIEZA DUPLICADOS) ===
 function Set-MaximoRendimiento {
-	$script:changesMade = $true
     Write-Host "Procesando Maximo rendimiento..." -ForegroundColor Yellow
-    
+
     $performanceNames = @(
-        "Maximo rendimiento", "Ultimate Performance", 
+        "Maximo rendimiento", "Ultimate Performance",
         "Alto rendimiento", "High performance", "Rendimiento elevado"
     )
-    
+
     # Obtener planes
     $plans = Get-PowerPlans
     if (-not $plans) {
         Write-Host "ERROR: No se pudieron leer los planes." -ForegroundColor Red
         return $false
     }
-    
+
     # Detectar plan activo
     $activeOutput = powercfg -getactivescheme | Out-String
     $activeGuid = $null
     if ($activeOutput -match '([a-f0-9-]{36})') { $activeGuid = $matches[1] }
-    
+
     # Buscar plan principal
     $targetPlan = $null
     foreach ($plan in $plans) {
@@ -1106,59 +1155,74 @@ function Set-MaximoRendimiento {
         }
         if ($targetPlan) { break }
     }
-    
-	# === LIMPIEZA DE DUPLICADOS (SEGURA) ===
-	$activeOutput = powercfg -getactivescheme | Out-String
-	$activeGuid = $null
-	if ($activeOutput -match '([a-f0-9-]{36})') { $activeGuid = $matches[1] }
 
-	$duplicatePlans = $plans | Where-Object {
-		$cleanDupName = $_.Name -replace '[^\x00-\x7F]', 'a'
-		foreach ($name in $performanceNames) {
-			if ($cleanDupName -match [regex]::Escape($name) -and $_.Guid -ne $targetPlan.Guid) {
-				return $true
-			}
-		}
-		$false
-	}
-
-	$deletedCount = 0
-	foreach ($dup in $duplicatePlans) {
-		if ($dup.Guid -eq $activeGuid) {
-			Write-Host "Saltando duplicado ACTIVO: $($dup.Name)" -ForegroundColor DarkGray
-			continue
-		}
-		try {
-			powercfg -delete $dup.Guid | Out-Null
-			if ($LASTEXITCODE -eq 0) {
-				Write-Host "Eliminado duplicado: $($dup.Name)" -ForegroundColor Cyan
-				$deletedCount++
-			}
-		} catch {
-			Write-Host "ADVERTENCIA: No se pudo borrar $($dup.Name) (puede ser activo)" -ForegroundColor Yellow
-		}
-	}
-	if ($deletedCount -gt 0) {
-		Write-Host "Limpiados $deletedCount planes duplicados" -ForegroundColor Green
-		Start-Sleep -Seconds 2
-		$plans = Get-PowerPlans
-	}
-    
-    # Activar plan principal (si existe)
+    # === SI YA ESTÁ PERFECTO (activo + sin duplicados) → NO HACEMOS NADA ===
     if ($targetPlan -and $targetPlan.Guid -eq $activeGuid) {
-        Write-Host "Maximo rendimiento YA ACTIVO: $($targetPlan.Name)" -ForegroundColor Green
-        return $true
-    }
-    
-    if ($targetPlan) {
-        Write-Host "Activando: $($targetPlan.Name)" -ForegroundColor Yellow
-        $result = powercfg /s $targetPlan.Guid 2>$null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Host "Maximo rendimiento ACTIVADO" -ForegroundColor Green
+        # Verificamos si hay duplicados
+        $duplicatePlans = $plans | Where-Object {
+            $cleanDupName = $_.Name -replace '[^\x00-\x7F]', 'a'
+            foreach ($name in $performanceNames) {
+                if ($cleanDupName -match [regex]::Escape($name) -and $_.Guid -ne $targetPlan.Guid) {
+                    return $true
+                }
+            }
+            $false
+        }
+
+        if ($duplicatePlans.Count -eq 0) {
+            Write-Host "Maximo rendimiento YA ACTIVO y sin duplicados: $($targetPlan.Name)" -ForegroundColor Green
             return $true
         }
     }
-    
+
+    # === SI LLEGA AQUÍ → SÍ HAY QUE HACER ALGO (limpiar, activar o crear) ===
+    $script:changesMade = $true
+
+    # === LIMPIEZA DE DUPLICADOS (SEGURA) ===
+    $activeOutput = powercfg -getactivescheme | Out-String
+    $activeGuid = $null
+    if ($activeOutput -match '([a-f0-9-]{36})') { $activeGuid = $matches[1] }
+
+    $duplicatePlans = $plans | Where-Object {
+        $cleanDupName = $_.Name -replace '[^\x00-\x7F]', 'a'
+        foreach ($name in $performanceNames) {
+            if ($cleanDupName -match [regex]::Escape($name) -and $_.Guid -ne $targetPlan.Guid) {
+                return $true
+            }
+        }
+        $false
+    }
+
+    $deletedCount = 0
+    foreach ($dup in $duplicatePlans) {
+        if ($dup.Guid -eq $activeGuid) {
+            Write-Host "Saltando duplicado ACTIVO: $($dup.Name)" -ForegroundColor DarkGray
+            continue
+        }
+        try {
+            powercfg -delete $dup.Guid | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "Eliminado duplicado: $($dup.Name)" -ForegroundColor Cyan
+                $deletedCount++
+            }
+        } catch {
+            Write-Host "ADVERTENCIA: No se pudo borrar $($dup.Name)" -ForegroundColor Yellow
+        }
+    }
+    if ($deletedCount -gt 0) {
+        Write-Host "Limpiados $deletedCount planes duplicados" -ForegroundColor Green
+        Start-Sleep -Seconds 2
+        $plans = Get-PowerPlans
+    }
+
+    # Activar plan principal (si existe)
+    if ($targetPlan -and $targetPlan.Guid -ne $activeGuid) {
+        Write-Host "Activando: $($targetPlan.Name)" -ForegroundColor Yellow
+        powercfg /s $targetPlan.Guid | Out-Null
+        Write-Host "Maximo rendimiento ACTIVADO" -ForegroundColor Green
+        return $true
+    }
+
     # Crear nuevo
     Write-Host "Creando nuevo plan..." -ForegroundColor Yellow
     $result = powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2>$null
@@ -1166,20 +1230,20 @@ function Set-MaximoRendimiento {
         Write-Host "No se pudo crear (Windows no lo soporta)" -ForegroundColor Red
         return $false
     }
-    
+
     Start-Sleep -Seconds 4
     $plans = Get-PowerPlans
-    $newPlan = $plans | Where-Object { 
+    $newPlan = $plans | Where-Object {
         $n = $_.Name -replace '[^\x00-\x7F]', 'a'
         $n -match "Ultimate|Maximo"
-    } | Select-Object -Last 1  # El más reciente
-    
+    } | Select-Object -Last 1
+
     if ($newPlan) {
-        $result = powercfg /s $newPlan.Guid 2>$null
+        powercfg /s $newPlan.Guid | Out-Null
         Write-Host "Nuevo plan CREADO Y ACTIVADO: $($newPlan.Name)" -ForegroundColor Green
         return $true
     }
-    
+
     Write-Host "Plan creado pero no activado automaticamente" -ForegroundColor Yellow
     return $false
 }
@@ -1450,7 +1514,6 @@ function Get-AllAMDGPUs {
 
 # === APLICAR SHADER CACHE (SOLO AMD RX) ===
 function Apply-ShaderCacheToAll {
-	$script:changesMade = $true
     param([byte[]]$Value)
     $gpus = Get-AllAMDGPUs
     $applied = 0
@@ -1464,6 +1527,7 @@ function Apply-ShaderCacheToAll {
             }
             Set-ItemProperty -Path $gpu.UMD -Name $reg3Name -Value $Value -Type Binary -Force | Out-Null
             $applied++
+			$script:changesMade = $true
         } catch {
             Log-Progress "ERROR Shader Cache [$($gpu.Name)]: $($_.Exception.Message)" Red
         }
@@ -1569,14 +1633,13 @@ function Configure-CustomPagefile {
     Log-Progress "Se necesita al menos $neededGB GB de memoria virtual" Yellow
     Log-Progress "Config: Min $minSizeMB MB | Max $maxSizeMB MB" Cyan
 
-    # Obtener discos fisicos SSD
+    # === OBTENER SSD VÁLIDOS ===
     $ssdDisks = Get-PhysicalDisk | Where-Object { $_.MediaType -eq "SSD" -and $_.OperationalStatus -eq "OK" }
     if (-not $ssdDisks) {
         Log-Progress "No se encontraron discos SSD." Red
         return
     }
 
-    # Relacionar discos con particiones y letras
     $validDrives = @()
     foreach ($disk in $ssdDisks) {
         $partitions = Get-Partition -DiskNumber $disk.DeviceId -ErrorAction SilentlyContinue
@@ -1595,15 +1658,13 @@ function Configure-CustomPagefile {
             }
         }
     }
-
     if ($validDrives.Count -eq 0) {
         Log-Progress "Ningun SSD tiene suficiente espacio libre ($($neededGB * 2) GB requeridos)." Red
         return
     }
 
-    # Mostrar opciones
+    # === SELECCIONAR DISCO ===
     if (-not $Silent) {
-        # === MODO INTERACTIVO (menú) ===
         Write-Host "`nSelecciona unidad SSD para pagefile:" -ForegroundColor Cyan
         for ($i = 0; $i -lt $validDrives.Count; $i++) {
             $d = $validDrives[$i]
@@ -1615,42 +1676,48 @@ function Configure-CustomPagefile {
         if ($choice -eq "S") { return }
         $selected = $validDrives[$choice - 1]
     } else {
-        # === MODO AUTOMÁTICO: elige el SSD con más espacio libre ===
         $selected = $validDrives | Sort-Object FreeGB -Descending | Select-Object -First 1
-        if (-not $selected) {
-            Log-Progress "No hay SSD con suficiente espacio ($($neededGB * 2) GB requeridos)." Red
-            return
-        }
         Write-Host "Auto: Usando $($selected.Letter) ($($selected.FreeGB) GB libre)" -ForegroundColor Cyan
     }
-    $pagefilePath = "$($selected.Letter)\pagefile.sys"
 
-    # Backup actual
-    if (-not $script:pagefileBackupDone) {
-        $current = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" -Name "PagingFiles" -ErrorAction SilentlyContinue).PagingFiles
-        if ($current) {
-            $backupFile = "$script:backupPath\pagefile_backup.reg"
-            "Windows Registry Editor Version 5.00`n`n[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management]`n`"PagingFiles`"=`"$($current -join "`n")`"" | Out-File $backupFile -Encoding ASCII
-            Log-Progress "Backup de pagefile guardado" Green
-            $script:pagefileBackupDone = $true
-        }
+    $pagefilePath = "$($selected.Letter)\pagefile.sys"
+    $desiredValue = "$pagefilePath $minSizeMB $maxSizeMB"
+
+    # === COMPROBAR SI YA ESTÁ CONFIGURADO ASÍ ===
+    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management"
+    $currentPaging = (Get-ItemProperty $regPath -Name "PagingFiles" -ErrorAction SilentlyContinue).PagingFiles
+    $currentString = ($currentPaging -join "`n").Trim()
+
+    if ($currentString -eq $desiredValue.Trim()) {
+        Write-Host "`nPagefile YA esta correctamente configurado en $($selected.Letter)" -ForegroundColor Gray
+        Write-Host " Min: $minSizeMB MB | Max: $maxSizeMB MB" -ForegroundColor Gray
+        return  # ← NO marcamos cambio
     }
 
-    # Desactivar gestion automatica
+    # === SI LLEGA AQUÍ → SÍ HAY QUE CAMBIAR ===
+    $script:changesMade = $true   # ← Solo aquí, cuando realmente cambia algo
+
+    # Backup (solo la primera vez)
+    if (-not $script:pagefileBackupDone -and $currentPaging) {
+        $backupFile = "$script:backupPath\pagefile_backup.reg"
+        "Windows Registry Editor Version 5.00`n`n[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management]`n`"PagingFiles`"=`"$($currentPaging -join "`n")`"" | Out-File $backupFile -Encoding ASCII
+        Log-Progress "Backup de pagefile guardado" Green
+        $script:pagefileBackupDone = $true
+    }
+
+    # Desactivar gestión automática
     try {
         $computer = Get-CimInstance Win32_ComputerSystem
         $computer.AutomaticManagedPagefile = $false
         Set-CimInstance -CimInstance $computer | Out-Null
     } catch { Log-Progress "Error desactivando gestion automatica" Red }
 
-    # Configurar pagefile
-    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management"
-    $value = "$pagefilePath $minSizeMB $maxSizeMB"
-    Set-ItemProperty -Path $regPath -Name "PagingFiles" -Value $value -Type MultiString -Force | Out-Null
+    # Aplicar nuevo pagefile
+    Set-ItemProperty -Path $regPath -Name "PagingFiles" -Value $desiredValue -Type MultiString -Force | Out-Null
 
-    # Limpiar pagefile anterior
+    # Limpiar pagefile anterior en C: (si existe y no es el seleccionado)
     $oldPagefile = "C:\pagefile.sys"
-    if (Test-Path $oldPagefile) {
+    if (Test-Path $oldPagefile -and $selected.Letter -ne "C:") {
         try { Remove-Item $oldPagefile -Force -ErrorAction SilentlyContinue } catch { }
     }
 
@@ -1658,20 +1725,18 @@ function Configure-CustomPagefile {
     Write-Host " Cantidad: $minSizeMB MB - $maxSizeMB MB" -ForegroundColor Cyan
     Write-Host " SSD: $($selected.Disk)" -ForegroundColor Gray
     Write-Host " REINICIA para aplicar." -ForegroundColor Red
-
-    $script:changesMade = $true
     Start-Sleep -Seconds 2
 }
 
 # === MODO AUTOMÁTICO / MANUAL ===
 function Start-AutoMode {
-	$script:changesMade = $true
     Write-Host "`nMODO AUTOMATICO: Aplicando configuracion recomendada..." -ForegroundColor Cyan
 
     # 1. DirectStorage -> Activado
     if ((Get-ItemProperty -Path $reg1Path -Name $reg1Name -ErrorAction SilentlyContinue).$reg1Name -ne 3) {
         New-ItemProperty -Path $reg1Path -Name $reg1Name -Value 3 -Type DWord -Force | Out-Null
         Write-Host "DirectStorage: Activado" -ForegroundColor Green
+		$script:changesMade = $true
     }
 
     # 2. MPO -> Desactivado
@@ -1679,6 +1744,7 @@ function Start-AutoMode {
     if ($mpoValue -ne 5) {
         New-ItemProperty -Path $reg2Path -Name $reg2Name -Value 5 -Type DWord -Force | Out-Null
         Write-Host "MPO: Desactivado" -ForegroundColor Green
+		$script:changesMade = $true
     }
 
     # 3. Modo Energia -> Maximo rendimiento
@@ -1730,17 +1796,15 @@ function Start-AutoMode {
 		}
 	}
 	
-	# === 7. NVIDIA: Shader Cache -> 10GB (NUEVO) ===
-		if ($script:hasNVIDIA) {
-			Write-Host "Aplicando Shader Cache NVIDIA: 10GB..." -ForegroundColor Yellow
-			if (Set-NVIDIAShaderCache -SizeName "10GB") {
-				Write-Host "Limpiando cache NVIDIA..." -ForegroundColor Yellow
-				Clear-GPUCache -Vendor "NVIDIA"
-			} else {
-				Write-Host "ERROR: No se pudo aplicar Shader Cache NVIDIA" -ForegroundColor Red
-			}
+	# === 7. NVIDIA: Shader Cache -> 10GB ===
+	if ($script:hasNVIDIA) {
+		Write-Host "Comprobando Shader Cache NVIDIA..." -ForegroundColor Yellow
+		if (Set-NVIDIAShaderCache -SizeName "10GB") {
+			Write-Host "Limpiando cache NVIDIA..." -ForegroundColor Yellow
+			Clear-GPUCache -Vendor "NVIDIA"
 		}
-		
+	}
+			
 	# === 8. MEMORIA VIRTUAL: COMPLETAR A $Global:TargetRAM (SOLO SI ES NECESARIO) ===
 	$physicalRAM = Get-PhysicalRAM
 	if ($physicalRAM -lt ($Global:TargetRAM / 1GB)) {
@@ -1941,7 +2005,7 @@ function Get-DynamicMenuOptions {
 				Set-ItemProperty -Path $reg1Path -Name $reg1Name -Value 0 -Type DWord -Force | Out-Null
 				Write-Host "`nDirectStorage: Desactivado (0)" -ForegroundColor Yellow
 			}
-			$script:changesMade = $true   # ← AÑADIDO AQUÍ (una sola línea = cubre ambos casos)
+			$script:changesMade = $true
 			Start-Sleep -Milliseconds 800
 		}
 	}
@@ -1960,7 +2024,7 @@ function Get-DynamicMenuOptions {
 				Remove-ItemProperty -Path $reg2Path -Name $reg2Name -ErrorAction SilentlyContinue
 				Write-Host "`nMPO: Activado (eliminado)" -ForegroundColor Yellow
 			}
-			$script:changesMade = $true   # ← AÑADIDO AQUÍ
+			$script:changesMade = $true
 			Start-Sleep -Milliseconds 800
 		}
 	}
@@ -2100,6 +2164,18 @@ function Get-DynamicMenuOptions {
             Action = {
                 Configure-CustomPagefile
             }
+        }
+    }
+
+	# === REFRESCAR MENU ===
+    $options += @{
+        Number = $options.Count + 1
+        Key = "R"
+        Text = "Refrescar menu / Actualizar estado"
+        Action = {
+            Write-Host "`nRefrescando estado del sistema..." -ForegroundColor Cyan
+            Update-Status
+            Start-Sleep -Milliseconds 800
         }
     }
 
@@ -2243,7 +2319,9 @@ function Show-Menu {
     Write-Host "Opciones:" -ForegroundColor Green
     foreach ($opt in $script:menuOptions) {
         if ($opt.Key -eq "S") {
-            Write-Host " $($opt.Key) - $($opt.Text)" -ForegroundColor Gray
+            Write-Host " $($opt.Key) - $($opt.Text)" -ForegroundColor Red
+        } elseif ($opt.Key -eq "R") {
+            Write-Host " $($opt.Key) - $($opt.Text)" -ForegroundColor Cyan   # ← resaltada para que se vea útil
         } else {
             Write-Host " $($opt.Key) - $($opt.Text)" -ForegroundColor White
         }
@@ -2330,15 +2408,11 @@ if ($modo -eq "1") {
     Start-AutoMode
 }
 
-# === CONTINUAR AL MENÚ ===
-Show-Menu
-
-# === BUCLE PRINCIPAL DINÁMICO ===
+# === INICIO DIRECTO AL MENÚ SIN REFRESCO ===
 $script:exitMenu = $false
 do {
     Show-Menu
     $opcion = (Read-Host "Elige opcion").ToUpper()
-
     $selected = $script:menuOptions | Where-Object { $_.Key -eq $opcion }
     if ($selected) {
         if ($selected.Action) {
