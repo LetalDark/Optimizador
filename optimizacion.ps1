@@ -268,7 +268,7 @@ function Update-CPUZInfo {
 						
 						# El archivo debe tener al menos 1KB para ser útil
 						if ($fileSize -gt 1024) {
-							# Verificar que el archivo no esté bloqueado
+							# Verificar que el archivo no este bloqueado
 							$fileStream = $null
 							try {
 								$fileStream = [System.IO.File]::Open($actualTxtPath, 'Open', 'Read', 'None')
@@ -277,7 +277,7 @@ function Update-CPUZInfo {
 								# Intentar leer el contenido
 								$testContent = Get-Content $actualTxtPath -Raw -ErrorAction Stop
 								if ($testContent -and $testContent.Length -gt 1000) {
-									# Verificar que tenga contenido crítico
+									# Verificar que tenga contenido critico
 									if ($testContent -match "DMI Baseboard" -and $testContent -match "Memory") {
 										$txtReady = $true
 										Log-Progress "# TXT VALIDO DETECTADO ($i segundos, $fileSize bytes)" Green -Subsection
@@ -299,7 +299,7 @@ function Update-CPUZInfo {
 									}
 								}
 							} catch {
-								# Archivo bloqueado - CPU-Z todavía escribiendo
+								# Archivo bloqueado - CPU-Z todavia escribiendo
 								if ($i % 5 -eq 0) {
 									Log-Progress "# CPU-Z escribiendo archivo... ($i segundos)" DarkGray -Subsection
 								}
@@ -346,7 +346,7 @@ function Update-CPUZInfo {
 					}
 				}
 				
-				# Intentar usar el TXT aunque esté incompleto
+				# Intentar usar el TXT aunque este incompleto
 				if (Test-Path $txtPath -and (Get-Item $txtPath).Length -gt 500) {
 					try {
 						$testContent = Get-Content $txtPath -Raw -ErrorAction Stop
@@ -696,7 +696,7 @@ function Update-GPUZInfo {
                 $card = $filteredCard.Card
                 $name = $filteredCard.DisplayName
 
-                # Línea 1: Nombre de la GPU
+                # Linea 1: Nombre de la GPU
                 $nameColor = if ($filteredCard.Type -eq "iGPU") { "Yellow" } else { "White" }
                 $script:gpuzInfo += [PSCustomObject]@{
                     Line = $name
@@ -705,7 +705,7 @@ function Update-GPUZInfo {
 
                 # Solo mostrar ReBAR y PCIe para GPUs dedicadas
                 if ($filteredCard.ShowDetails) {
-                    # Línea 2: Estado ReBAR
+                    # Linea 2: Estado ReBAR
                     $rebar = if ($card.resizablebar -eq "Enabled") { "Activado" } else { "Desactivado" }
                     $rebarColor = if ($card.resizablebar -eq "Enabled") { "Green" } else { "Red" }
                     $script:gpuzInfo += [PSCustomObject]@{
@@ -713,7 +713,7 @@ function Update-GPUZInfo {
                         Color = $rebarColor
                     }
 
-                    # Línea 3: Conexión PCIe (solo "actual")
+                    # Linea 3: Conexión PCIe (solo "actual")
                     $maxMatch = [regex]::Match($card.businterface, "x(\d+)\s+([\d\.]+)")
                     $recWidth = if ($maxMatch.Success) { "x$($maxMatch.Groups[1].Value)" } else { "x?" }
                     $recGenRaw = if ($maxMatch.Success) { [double]$maxMatch.Groups[2].Value } else { 0 }
@@ -797,14 +797,14 @@ function Update-GPUZInfo {
                     }
                 }
 
-                # Línea vacía entre GPUs
+                # Linea vacia entre GPUs
                 $script:gpuzInfo += [PSCustomObject]@{
                     Line = ""
                     Color = "White"
                 }
             }
 
-            # Remover última línea vacía
+            # Remover última linea vacia
             if ($script:gpuzInfo.Count -gt 0 -and $script:gpuzInfo[-1].Line -eq "") {
                 $script:gpuzInfo = $script:gpuzInfo[0..($script:gpuzInfo.Count-2)]
             }
@@ -814,7 +814,7 @@ function Update-GPUZInfo {
 			if ($rebarOff -and $script:motherboard -and $script:motherboard -notmatch "Desconocido|No disponible") {
 				# Usar el nombre completo que ya detectó CPU-Z
 				$cleanName = $script:motherboard.Trim()
-				# Solo quitar paréntesis si los hay y espacios sobrantes
+				# Solo quitar parentesis si los hay y espacios sobrantes
 				$cleanName = $cleanName -replace '\s*\([^)]*\)', '' -replace '\s+$', ''
 				$script:rebarYoutube = "$cleanName enable Resizable BAR"
 			}
@@ -823,7 +823,7 @@ function Update-GPUZInfo {
             Log-Progress "# GPU-Z: INFORMACION LEIDA CORRECTAMENTE" Green -Subsection
             Log-Progress "# ----------------------------------------------------" Gray -Subsection
 
-			# === MOSTRAR GPUs DETECTADAS AQUÍ ===
+			# === MOSTRAR GPUs DETECTADAS AQUi ===
 			Log-Progress "# GPUs DETECTADAS (GPU-Z)" Cyan -Subsection
 			Log-Progress "# -------------------------------------------------------------------" Gray -Subsection
 			foreach ($info in $script:gpuzInfo) {
@@ -844,7 +844,7 @@ function Update-GPUZInfo {
         $script:gpuzInfo = "Error GPU-Z: $($_.Exception.Message)"
         Log-Progress "$script:gpuzInfo" Red -Error
     } finally {
-        # Limpieza final - asegurarse de que GPU-Z esté cerrado
+        # Limpieza final - asegurarse de que GPU-Z este cerrado
         try {
             $processes = Get-Process -Name "GPU-Z*" -ErrorAction SilentlyContinue
             foreach ($proc in $processes) {
@@ -1046,7 +1046,7 @@ function Set-NVIDIAShaderCache {
         return $false
     }
 
-    # === SI LLEGA AQUÍ → SÍ HAY QUE CAMBIAR ===
+    # === SI LLEGA AQUi → Si HAY QUE CAMBIAR ===
     $cmd = "& `"$exePath`" -p `"Base Profile`" --set `"00AC8497=$desiredHex`""
     try {
         Invoke-Expression $cmd | Out-Null
@@ -1098,7 +1098,7 @@ function Show-LoadingProcess {
     Start-Sleep -Seconds 2
 }
 
-# === FUNCIÓN GLOBAL: OBTENER PLANES DE ENERGÍA CON UTF8 Y LIMPIEZA ===
+# === FUNCIÓN GLOBAL: OBTENER PLANES DE ENERGiA CON UTF8 Y LIMPIEZA ===
 function Get-PowerPlans {
     $plansRaw = powercfg -l | Out-String -Stream
     $plans = @()
@@ -1156,7 +1156,7 @@ function Set-MaximoRendimiento {
         if ($targetPlan) { break }
     }
 
-    # === SI YA ESTÁ PERFECTO (activo + sin duplicados) → NO HACEMOS NADA ===
+    # === SI YA ESTa PERFECTO (activo + sin duplicados) → NO HACEMOS NADA ===
     if ($targetPlan -and $targetPlan.Guid -eq $activeGuid) {
         # Verificamos si hay duplicados
         $duplicatePlans = $plans | Where-Object {
@@ -1175,7 +1175,7 @@ function Set-MaximoRendimiento {
         }
     }
 
-    # === SI LLEGA AQUÍ → SÍ HAY QUE HACER ALGO (limpiar, activar o crear) ===
+    # === SI LLEGA AQUi → Si HAY QUE HACER ALGO (limpiar, activar o crear) ===
     $script:changesMade = $true
 
     # === LIMPIEZA DE DUPLICADOS (SEGURA) ===
@@ -1311,11 +1311,11 @@ function Test-MousePollingRate {
 	$mouseMoveHandler = {
 		$mouseTimes.Add($sw.Elapsed.TotalMilliseconds)
 		$script:mouseMoveCount++
-		$sw.Restart()   # ← Aquí pierdes el tiempo real entre eventos
+		$sw.Restart()   # ← Aqui pierdes el tiempo real entre eventos
 	}
 	$form.Add_MouseMove($mouseMoveHandler)
 
-	# Timer para cerrar después de 8 segundos
+	# Timer para cerrar despues de 8 segundos
 	$timer = New-Object System.Windows.Forms.Timer
 	$timer.Interval = 8000
 	$timer.Add_Tick({
@@ -1620,20 +1620,34 @@ function Configure-CustomPagefile {
     param([switch]$Silent)
     $physicalRAM = Get-PhysicalRAM
     $ramGB = [int]$physicalRAM
-    if ($ramGB -ge ($Global:TargetRAM / 1GB)) {
-        Log-Progress "RAM suficiente ($ramGB GB). No se necesita pagefile extra." Gray
+
+    # Lógica final 2025: llegar a 32GB totales, pero NUNCA menos de 16GB de pagefile
+    $neededFor32GB = [Math]::Max(0, ($Global:DesiredTotalRAM / 1GB) - $ramGB)
+    $neededGB = [Math]::Max($Global:MinPagefileGB, $neededFor32GB)
+
+    # Comprobar si YA cumple el minimo
+    $currentPagefileGB = 0
+    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management"
+    $currentPaging = (Get-ItemProperty $regPath -Name "PagingFiles" -ErrorAction SilentlyContinue).PagingFiles
+    if ($currentPaging) {
+        foreach ($line in $currentPaging) {
+            if ($line -match "\s+(\d+)\s+(\d+)$") {
+                $currentPagefileGB = [math]::Max($currentPagefileGB, [int]$matches[2] / 1024)
+            }
+        }
+    }
+    if ($currentPagefileGB -ge $neededGB) {
+        if (-not $Silent) { Write-Host "`nPagefile YA tiene $currentPagefileGB GB → suficiente" -ForegroundColor Gray }
+        Log-Progress "Pagefile suficiente ($currentPagefileGB GB)" Gray
         return
     }
 
-    $neededGB = ($Global:TargetRAM / 1GB) - $ramGB
     $minSizeMB = [int]($neededGB * 1024)
     $maxSizeMB = $minSizeMB * 2
-
-    Log-Progress "RAM fisica: $ramGB GB. Objetivo: $($Global:TargetRAM / 1GB) GB" Yellow
-    Log-Progress "Se necesita al menos $neededGB GB de memoria virtual" Yellow
+    Log-Progress "RAM fisica: $ramGB GB → configurando pagefile de $neededGB GB (minimo 16GB)" Yellow
     Log-Progress "Config: Min $minSizeMB MB | Max $maxSizeMB MB" Cyan
 
-    # === OBTENER SSD VÁLIDOS ===
+    # === OBTENER SSD VaLIDOS ===
     $ssdDisks = Get-PhysicalDisk | Where-Object { $_.MediaType -eq "SSD" -and $_.OperationalStatus -eq "OK" }
     if (-not $ssdDisks) {
         Log-Progress "No se encontraron discos SSD." Red
@@ -1683,7 +1697,7 @@ function Configure-CustomPagefile {
     $pagefilePath = "$($selected.Letter)\pagefile.sys"
     $desiredValue = "$pagefilePath $minSizeMB $maxSizeMB"
 
-    # === COMPROBAR SI YA ESTÁ CONFIGURADO ASÍ ===
+    # === COMPROBAR SI YA ESTa CONFIGURADO ASi ===
     $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management"
     $currentPaging = (Get-ItemProperty $regPath -Name "PagingFiles" -ErrorAction SilentlyContinue).PagingFiles
     $currentString = ($currentPaging -join "`n").Trim()
@@ -1694,8 +1708,8 @@ function Configure-CustomPagefile {
         return  # ← NO marcamos cambio
     }
 
-    # === SI LLEGA AQUÍ → SÍ HAY QUE CAMBIAR ===
-    $script:changesMade = $true   # ← Solo aquí, cuando realmente cambia algo
+    # === SI LLEGA AQUi → Si HAY QUE CAMBIAR ===
+    $script:changesMade = $true   # ← Solo aqui, cuando realmente cambia algo
 
     # Backup (solo la primera vez)
     if (-not $script:pagefileBackupDone -and $currentPaging) {
@@ -1705,7 +1719,7 @@ function Configure-CustomPagefile {
         $script:pagefileBackupDone = $true
     }
 
-    # Desactivar gestión automática
+    # Desactivar gestión automatica
     try {
         $computer = Get-CimInstance Win32_ComputerSystem
         $computer.AutomaticManagedPagefile = $false
@@ -1717,7 +1731,7 @@ function Configure-CustomPagefile {
 
     # Limpiar pagefile anterior en C: (si existe y no es el seleccionado)
     $oldPagefile = "C:\pagefile.sys"
-    if (Test-Path $oldPagefile -and $selected.Letter -ne "C:") {
+    if ((Test-Path $oldPagefile) -and ($selected.Letter -notlike "C:")) {
         try { Remove-Item $oldPagefile -Force -ErrorAction SilentlyContinue } catch { }
     }
 
@@ -1728,7 +1742,7 @@ function Configure-CustomPagefile {
     Start-Sleep -Seconds 2
 }
 
-# === MODO AUTOMÁTICO / MANUAL ===
+# === MODO AUTOMaTICO / MANUAL ===
 function Start-AutoMode {
     Write-Host "`nMODO AUTOMATICO: Aplicando configuracion recomendada..." -ForegroundColor Cyan
 
@@ -1756,11 +1770,15 @@ function Start-AutoMode {
     # 5. Mouse Acceleration -> OFF
     $currentAccel = Get-MouseAccelStatus
     if ($currentAccel.Estado -eq "Activado") {
-        Toggle-MouseAcceleration  # Desactiva si está ON
+        Toggle-MouseAcceleration  # Desactiva si esta ON
         Write-Host "Mouse Acceleration: DESACTIVADA (Gaming Mode)" -ForegroundColor Green
     }
+	
+	# === 6. MEMORIA VIRTUAL → Siempre llegar a 32GB totales (minimo 16GB pagefile) ===
+	Write-Host "`nConfigurando memoria virtual: llegar a 32GB totales (minimo 16GB)..." -ForegroundColor Yellow
+	Configure-CustomPagefile -Silent
 
-	# 6. AMD Shader Cache -> Siempre Activado + limpiar
+	# 7. AMD Shader Cache -> Siempre Activado + limpiar
 	Log-Progress "Aplicando Shader Cache AMD..." Yellow
 
 	# === REFRESCAR GPUs SIEMPRE ===
@@ -1789,29 +1807,20 @@ function Start-AutoMode {
 			# === APLICAR 32 00 ===
 			$applied = Apply-ShaderCacheToAll -Value @([byte]0x32, [byte]0x00)
 			Log-Progress "Shader Cache: Siempre Activado (32 00) en $applied GPU(s)" Green
-			Log-Progress "Limpiando caché AMD..." Yellow
+			Log-Progress "Limpiando cache AMD..." Yellow
 			Clear-GPUCache -Vendor "AMD"
 		} else {
 			Log-Progress "Shader Cache: YA en Siempre Activado" Green
 		}
 	}
 	
-	# === 7. NVIDIA: Shader Cache -> 10GB ===
+	# === 8. NVIDIA: Shader Cache -> 10GB ===
 	if ($script:hasNVIDIA) {
 		Write-Host "Comprobando Shader Cache NVIDIA..." -ForegroundColor Yellow
 		if (Set-NVIDIAShaderCache -SizeName "10GB") {
 			Write-Host "Limpiando cache NVIDIA..." -ForegroundColor Yellow
 			Clear-GPUCache -Vendor "NVIDIA"
 		}
-	}
-			
-	# === 8. MEMORIA VIRTUAL: COMPLETAR A $Global:TargetRAM (SOLO SI ES NECESARIO) ===
-	$physicalRAM = Get-PhysicalRAM
-	if ($physicalRAM -lt ($Global:TargetRAM / 1GB)) {
-		Write-Host "`nConfigurando memoria virtual para alcanzar $($Global:TargetRAM / 1GB)GB..." -ForegroundColor Yellow
-		Configure-CustomPagefile -Silent
-	} else {
-		Write-Host "RAM suficiente ($([int]$physicalRAM) GB). No se necesita pagefile." -ForegroundColor Gray
 	}
 	
 	# === REFRESCAR ESTADO ===
@@ -1844,7 +1853,7 @@ function Update-Status {
         }
     }
 
-    # === INTENTAR CON REGISTRO CLÁSICO ===
+    # === INTENTAR CON REGISTRO CLaSICO ===
     $gpus = Get-AllAMDGPUs
     $script:estado3 = "No detectado"; $script:valor3 = "No existe"
 
@@ -1887,7 +1896,7 @@ function Update-Status {
         }
     }
 
-	# === MODO ENERGÍA - DETECCIÓN FIABLE ===
+	# === MODO ENERGiA - DETECCIÓN FIABLE ===
 	$script:estado4 = "No existe"
 	$script:valor4 = "Maximo rendimiento"
 
@@ -1942,52 +1951,43 @@ function Update-Status {
     # === ESPACIO EN DISCO ===
     Get-DiskSpaceInfo
 
-    # === ESTADO MEMORIA VIRTUAL – LECTURA FIABLE DEL REGISTRO ===
+    # === ESTADO MEMORIA VIRTUAL – LECTURA FIABLE DEL REGISTRO (2025) ===
     $physicalRAM = Get-PhysicalRAM
     $ramGB = [int]$physicalRAM
-    $targetGB = $Global:TargetRAM / 1GB
 
-    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management"
-    $pagingProp = Get-ItemProperty $regPath -Name "PagingFiles" -ErrorAction SilentlyContinue
+    # Calcular cuanto pagefile deberiamos tener según la nueva logica
+	$neededFor32GB = [Math]::Max(0, $Global:DesiredTotalRAM - $ramGB)
+	$requiredPagefileGB = [Math]::Max($Global:MinPagefileGB, $neededFor32GB)
 
+    # Leer pagefile actual
     $currentPagefileGB = 0
     $driveLetter = "Ninguna"
-
-    if ($pagingProp -and $pagingProp.PagingFiles) {
-        # Forzar como array y limpiar
-        $lines = @($pagingProp.PagingFiles) | Where-Object { $_ }
-        foreach ($line in $lines) {
-            if ($line -match "^([A-Z]:\\pagefile\.sys)\s+(\d+)\s+(\d+)") {
-                $driveLetter = ($matches[1] -split ":")[0] + ":"
-                $maxMB = [int]$matches[3]
-                $currentPagefileGB = [math]::Round($maxMB / 1024, 1)
-                break  # Solo la primera entrada activa
+    $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management"
+    $currentPaging = (Get-ItemProperty $regPath -Name "PagingFiles" -ErrorAction SilentlyContinue).PagingFiles
+    if ($currentPaging) {
+        foreach ($line in $currentPaging) {
+            if ($line -match "\s+(\d+)\s+(\d+)$") {
+                $currentPagefileGB = [math]::Max($currentPagefileGB, [int]$matches[2] / 1024)
+                if ($line -match "^([A-Z]:)") { $driveLetter = "$($matches[1])" }
             }
         }
     }
 
-    $totalVirtualRAM = $ramGB + $currentPagefileGB
+    $totalRAM = $ramGB + $currentPagefileGB
 
-    if ($ramGB -ge $targetGB) {
-        $script:pagefileState = "$ramGB GB RAM (suficiente)"
+    if ($currentPagefileGB -ge $requiredPagefileGB) {
+        $script:pagefileState = "$ramGB GB RAM + $currentPagefileGB GB pagefile = $totalRAM GB total (OK)"
         $script:pagefileColor = "Green"
-    }
-    elseif ($currentPagefileGB -gt 0) {
-        $script:pagefileState = "Configurado en $driveLetter (Actualmente: $totalVirtualRAM GB - Objetivo: $targetGB GB)"
-        $color = if ($totalVirtualRAM -ge $targetGB) { "Green" } 
-                 elseif ($totalVirtualRAM -ge ($targetGB * 0.8)) { "Yellow" } 
-                 else { "Red" }
-        $script:pagefileColor = $color
-    }
-    else {
-        $needed = $targetGB - $ramGB
-        $script:pagefileState = "$ramGB GB RAM (falta $needed GB)"
+    } else {
+        $faltanGB = $requiredPagefileGB - $currentPagefileGB
+        $faltanTexto = "$faltanGB".TrimEnd('.0')
+        $script:pagefileState = "$ramGB GB RAM + $currentPagefileGB GB pagefile (falta ~$faltanTexto GB para minimo recomendado)"
         $script:pagefileColor = "Red"
     }
 
 }
 
-# === DETECCIÓN DINÁMICA DE OPCIONES DE MENÚ ===
+# === DETECCIÓN DINaMICA DE OPCIONES DE MENÚ ===
 function Get-DynamicMenuOptions {
     $options = @()
 
@@ -2029,7 +2029,7 @@ function Get-DynamicMenuOptions {
 		}
 	}
 
-    # 3. Modo Energía
+    # 3. Modo Energia
     $options += @{
         Number = $options.Count + 1
         Key = "3"
@@ -2059,6 +2059,16 @@ function Get-DynamicMenuOptions {
         Action = { 
             Toggle-MouseAcceleration
             Start-Sleep -Milliseconds 800
+        }
+    }
+
+    # === 6. MEMORIA VIRTUAL → Siempre visible (llegar a 32GB totales, minimo 16GB pagefile) ===
+    $options += @{
+        Number = 6
+        Key = "6"
+        Text = "Memoria Virtual: Llegar a 32GB totales (minimo 16GB en SSD)"
+        Action = {
+            Configure-CustomPagefile
         }
     }
 
@@ -2153,19 +2163,6 @@ function Get-DynamicMenuOptions {
 			}
 		}
 	}
-	
-    # === MEMORIA VIRTUAL DINAMICA (solo si RAM < TargetRAM) ===
-    $physicalRAM = Get-PhysicalRAM
-    if ($physicalRAM -lt ($Global:TargetRAM / 1GB)) {
-        $options += @{
-            Number = $options.Count + 1
-            Key = [string]($options.Count + 1)
-            Text = "Memoria Virtual: Completar a $($Global:TargetRAM / 1GB)GB"
-            Action = {
-                Configure-CustomPagefile
-            }
-        }
-    }
 
 	# === REFRESCAR MENU ===
     $options += @{
@@ -2192,7 +2189,7 @@ function Get-DynamicMenuOptions {
 
 # === MOSTRAR MENU ===
 function Show-Menu {
-    # === 1. PRIMERO: GENERAR LAS OPCIONES DINÁMICAS ===
+    # === 1. PRIMERO: GENERAR LAS OPCIONES DINaMICAS ===
     $script:menuOptions = Get-DynamicMenuOptions
 
     # === 2. ACTUALIZAR ESTADO (necesario para colores y textos) ===
@@ -2243,7 +2240,7 @@ function Show-Menu {
     Write-Host " + Muscle memory real | + Headshots precisos" -ForegroundColor Cyan
     Write-Host ""
 
-    # === AMD SHADER CACHE (solo si está en menuOptions) ===
+    # === AMD SHADER CACHE (solo si esta en menuOptions) ===
     $amdOption = $script:menuOptions | Where-Object { $_.Text -match "AMD: Alternar Shader Cache" }
     if ($amdOption) {
         $color3 = if ($script:estado3 -eq "Siempre Activado") { "Green" } else { "Red" }
@@ -2309,7 +2306,7 @@ function Show-Menu {
 	Write-Host "MEMORIA VIRTUAL" -ForegroundColor Cyan
     Write-Host "Configuracion actual -> " -NoNewline -ForegroundColor White
     Write-Host "$script:pagefileState" -ForegroundColor $script:pagefileColor
-    Write-Host " Util para sistemas con menos de 32GB de RAM" -ForegroundColor Gray
+    Write-Host " Util en sistemas con menos de 32GB RAM (minimo 16GB pagefile aunque tengas 128GB RAM)" -ForegroundColor Cyan
     Write-Host ""
 
     Write-Host "$script:backupInfo" -ForegroundColor Cyan
@@ -2370,7 +2367,8 @@ function Show-FinalMenu {
 }
 
 # === VARIABLES ===
-$Global:TargetRAM = 32GB
+$Global:MinPagefileGB   = 16   # 16 GB minimo
+$Global:DesiredTotalRAM = 32   # Objetivo 32 GB totales
 $script:pagefileBackupDone = $false
 $script:changesMade = $false
 $script:gpus = $null
