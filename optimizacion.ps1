@@ -142,20 +142,46 @@ function RegistersBackup {
     $script:backupInfo = if ($backupFiles.Count -eq 3) { "Backup OK: $backupPath" } else { "Backup PARCIAL: $backupPath" }
 }
 
-# === COMPROBAR SI HUBO REINICIO DESDE ÚLTIMA EJECUCIÓN ===
+# === DETECTAR REINICIO - VERSIÓN PROFESIONAL 100% FIABLE (2025) ===
 function Test-RebootSinceLastRun {
-    $lastBackup = Get-ChildItem "C:\Temp\Backup_Registros" -ErrorAction SilentlyContinue | 
-                  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    $markerFile = "$env:TEMP\LetalOptimizer_RunInfo.marker"
 
-    if (-not $lastBackup) { return $false }
+    try {
+        $currentBootTime = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+        $currentRunTime  = Get-Date
 
-    # Última vez que se modificó un backup
-    $lastBackupTime = $lastBackup.LastWriteTime
+        if (-not (Test-Path $markerFile)) {
+            # Primera ejecución → regenerar todo
+            "LastBoot=$currentBootTime`nLastRun=$currentRunTime" | Out-File $markerFile -Encoding UTF8 -Force
+            return $true
+        }
 
-    # Hora de arranque del sistema
-    $bootTime = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
+        # Leer datos anteriores
+        $data = Get-Content $markerFile | Where-Object { $_ -match "=" }
+        $lastBoot = ($data | Where-Object { $_ -like "LastBoot=*" } ) -replace "LastBoot=", ""
+        $lastRun  = ($data | Where-Object { $_ -like "LastRun=*" } ) -replace "LastRun=", ""
 
-    return $bootTime -gt $lastBackupTime
+        $lastBootTime = [datetime]$lastBoot
+        $lastRunTime  = [datetime]$lastRun
+
+        # Si el arranque actual es más reciente que la última ejecución → hubo reinicio
+        $rebooted = $currentBootTime -gt $lastRunTime
+		
+		# Guardar resultado en variable global
+        $script:MustRegenerateTools = $rebooted
+
+        # Actualizar archivo con datos actuales
+        "LastBoot=$currentBootTime`nLastRun=$currentRunTime" | Out-File $markerFile -Encoding UTF8 -Force
+
+        return $rebooted
+    }
+    catch {
+        # Cualquier error → regenerar por seguridad
+        try {
+            "LastBoot=$currentBootTime`nLastRun=$currentRunTime" | Out-File $markerFile -Encoding UTF8 -Force
+        } catch {}
+        return $true
+    }
 }
 
 # === GENERAR Y LEER TXT DE CPU-Z (XMP + RAM + PLACA BASE) ===
@@ -169,14 +195,13 @@ function Update-CPUZInfo {
         $txtPath = "$scriptPath\meminfo.txt"
 
 		# === OPTIMIZACIÓN: REUTILIZAR SI NO HUBO REINICIO ===
-        $skipGeneration = $false
-        if (-not (Test-RebootSinceLastRun) -and (Test-Path $txtPath)) {
-            $fileAge = (Get-Date) - (Get-Item $txtPath).LastWriteTime
-            if ($fileAge.TotalHours -lt 48) {
-                Log-Progress "# Reutilizando meminfo.txt existente" Green -Subsection
-                $skipGeneration = $true
-            }
-        }
+		if (-not $script:MustRegenerateTools -and (Test-Path $txtPath)) {
+			$fileAge = (Get-Date) - (Get-Item $txtPath).LastWriteTime
+			if ($fileAge.TotalHours -lt 48) {
+				Log-Progress "# Reutilizando meminfo.txt existente (sin reinicio)" Green -Subsection
+				$skipGeneration = $true
+			}
+		}
 
 		if (-not $skipGeneration) {
 			# === DESCARGAR Y EXTRAER CPU-Z ===
@@ -488,13 +513,13 @@ function Update-GPUZInfo {
         $zipPath = "$scriptPath\gpuz_temp.zip"
 		
 		$skipGeneration = $false
-        if (-not (Test-RebootSinceLastRun) -and (Test-Path $xmlPath)) {
-            $fileAge = (Get-Date) - (Get-Item $xmlPath).LastWriteTime
-            if ($fileAge.TotalHours -lt 48) {
-                Log-Progress "# Reutilizando gpuz.xml existente" Green -Subsection
-                $skipGeneration = $true
-            }
-        }
+		if (-not $script:MustRegenerateTools -and (Test-Path $xmlPath)) {
+			$fileAge = (Get-Date) - (Get-Item $xmlPath).LastWriteTime
+			if ($fileAge.TotalHours -lt 48) {
+				Log-Progress "# Reutilizando gpuz.xml existente (sin reinicio)" Green -Subsection
+				$skipGeneration = $true
+			}
+		}
 
 		if (-not $skipGeneration) {
 			# === DESCARGAR Y EXTRAER GPU-Z ===
@@ -1605,6 +1630,42 @@ function Get-DiskSpaceInfo {
     $script:allDisks = $results
 }
 
+# === TEST VELOCIDAD SSD SIN DEPENDENCIAS (2025) ===
+function Test-DiskSpeed {
+    param([string]$DriveLetter)
+
+    $testFile = "$DriveLetter\pagefile_speed_test.tmp"
+    $sizeMB = 5120  # 5 GB → obliga a bypass de caché en casi todos los casos
+
+    try {
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $fs = [IO.File]::Create($testFile, 4096, 'WriteThrough')
+        $buffer = New-Object Byte[] (8*1024*1024)  # 8 MB buffer
+        for($i = 0; $i -lt ($sizeMB/8); $i++) { $fs.Write($buffer, 0, $buffer.Length) }
+        $fs.Close()
+        $writeTime = $sw.Elapsed.TotalSeconds
+
+        # Forzar limpieza de caché lo máximo posible sin exe externo
+        [GC]::Collect()
+        [GC]::WaitForPendingFinalizers()
+        Start-Sleep -Milliseconds 800
+
+        $sw.Restart()
+        $fs = [IO.File]::OpenRead($testFile)
+        while ($fs.Read($buffer, 0, $buffer.Length) -gt 0) {}
+        $fs.Close()
+        $readTime = $sw.Elapsed.TotalSeconds
+
+        Remove-Item $testFile -Force
+
+        return [math]::Round($sizeMB / $writeTime, 0)  # Solo escritura → lo que importa para pagefile
+    }
+    catch {
+        Remove-Item $testFile -Force -ErrorAction SilentlyContinue
+        return 0
+    }
+}
+
 # === OBTENER RAM ===
 function Get-PhysicalRAM {
     try {
@@ -1680,9 +1741,23 @@ function Configure-CustomPagefile {
     # === SELECCIONAR DISCO ===
     if (-not $Silent) {
         Write-Host "`nSelecciona unidad SSD para pagefile:" -ForegroundColor Cyan
+        # Calcular velocidades en modo manual también
+        Log-Progress "Midiendo velocidad de SSDs disponibles..." Yellow
+        $fastest = $null; $maxSpeed = 0
+        foreach ($drive in $validDrives) {
+            $speed = Test-DiskSpeed -DriveLetter $drive.Letter
+            $drive | Add-Member -NotePropertyName SpeedMBs -NotePropertyValue $speed -Force
+            if ($speed -gt $maxSpeed) { $maxSpeed = $speed; $fastest = $drive }
+        }
+
         for ($i = 0; $i -lt $validDrives.Count; $i++) {
             $d = $validDrives[$i]
-            Write-Host " $($i+1) - $($d.Letter) ($($d.FreeGB) GB libre) - $($d.Disk)" -ForegroundColor White
+            $text = " $($i+1) - $($d.Letter) ($($d.FreeGB) GB libre | $($d.SpeedMBs) MB/s) - $($d.Disk)"
+            if ($d.Letter -eq $fastest.Letter) {
+                Write-Host "$text <-- RECOMENDADO (mas rapido)" -ForegroundColor Green
+            } else {
+                Write-Host $text -ForegroundColor White
+            }
         }
         Write-Host " S - Salir" -ForegroundColor Gray
         do { $choice = (Read-Host "`nElige 1-$($validDrives.Count) o S").ToUpper() }
@@ -1690,8 +1765,15 @@ function Configure-CustomPagefile {
         if ($choice -eq "S") { return }
         $selected = $validDrives[$choice - 1]
     } else {
-        $selected = $validDrives | Sort-Object FreeGB -Descending | Select-Object -First 1
-        Write-Host "Auto: Usando $($selected.Letter) ($($selected.FreeGB) GB libre)" -ForegroundColor Cyan
+        # MODO AUTOMATICO: elegir el SSD más rápido
+        Log-Progress "Probando velocidad de discos SSD..." Yellow
+        foreach ($drive in $validDrives) {
+            $speed = Test-DiskSpeed -DriveLetter $drive.Letter
+            $drive | Add-Member -NotePropertyName SpeedMBs -NotePropertyValue $speed -Force
+            Log-Progress "$($drive.Letter) -> $speed MB/s lectura secuencial" Cyan
+        }
+        $selected = $validDrives | Sort-Object SpeedMBs -Descending | Select-Object -First 1
+        Write-Host "Auto: SSD mas rapido -> $($selected.Letter) ($($selected.SpeedMBs) MB/s | $($selected.FreeGB) GB libre)" -ForegroundColor Green
     }
 
     $pagefilePath = "$($selected.Letter)\pagefile.sys"
@@ -2381,8 +2463,9 @@ $script:mouseTested = $false
 # === INICIO ===
 Set-ConsoleZoomAndMaximize
 Clear-Host
-RegistersBackup
 Update-BatchFile
+RegistersBackup
+$null = Test-RebootSinceLastRun
 Update-CPUZInfo
 Update-GPUZInfo
 GPU-CheckGPUZorRegister
