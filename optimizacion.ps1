@@ -2412,11 +2412,18 @@ function Show-Menu {
 	}
 	Show-RebarWarning
 
-    Write-Host "INFO RAM (CPU-Z):" -ForegroundColor Cyan
-    if ($script:cpuzInfo) {
-        Write-Host " $($script:cpuzInfo.Line)" -ForegroundColor $script:cpuzInfo.Color
-    }
-    Show-XmpWarning
+	Write-Host "INFO RAM (CPU-Z):" -ForegroundColor Cyan
+	if ($script:cpuzInfo) {
+		# Parte estática en blanco
+		$staticPart = $script:cpuzInfo.Line -replace "Actual:.*", ""
+		$staticPart = $staticPart.TrimEnd(" |")
+		Write-Host " $staticPart" -ForegroundColor White
+
+		# Parte dinámica (Actual + status) con el color del status
+		$dynamicPart = $script:cpuzInfo.Line -replace "^.*Actual:", "Actual:"
+		Write-Host " $dynamicPart" -ForegroundColor $script:cpuzInfo.Color
+	}
+	Show-XmpWarning
 
 	Write-Host "ESPACIO DE DISCO EN EL SISTEMA OPERATIVO" -ForegroundColor Cyan
 	if ($script:systemDisk) {
