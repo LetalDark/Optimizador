@@ -2381,6 +2381,12 @@ function Show-Menu {
 		Write-Host ""
 	}
 
+    # === INFO HARDWARE ===
+    Write-Host "INFO Placa Base:" -ForegroundColor Cyan
+    Write-Host " $script:motherboard" -ForegroundColor White
+	Write-Host "INFO CPU:" -ForegroundColor Cyan
+	Write-Host " $script:cpuName" -ForegroundColor White
+
 	Write-Host "INFO GPU (GPU-Z):" -ForegroundColor Cyan
 	if ($script:gpuzInfo) {
 		$vramLines = $script:gpuVramInfo -split "`n"
