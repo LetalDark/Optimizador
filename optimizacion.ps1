@@ -467,14 +467,14 @@ function Update-CPUZInfo {
 
         $line = "RAM | XMP-$maxXMP | Actual: $currentSpeed MHz (x2 = $effectiveSpeed) -> $statusText"
         $script:cpuzInfo = [PSCustomObject]@{ Line = $line; Color = $statusColor }
-        # === CONSEJO XMP MEJORADO ===
-        $script:xmpAdvice = $null
-        if ($statusText -eq "Desactivado" -and $maxXMP -gt 0 -and $script:motherboard -notin "Desconocido", "No disponible") {
-            $cleanName = ($script:motherboard -split " ")[0..1] -join " "
-            $cleanName = $cleanName -replace '\s*\([^)]*\)', '' -replace '\s+$', ''
-            $currentSpeedRounded = [math]::Round($currentSpeed, 0)
-            $script:xmpAdvice = "Pierdes hasta 25% FPS + stuttering por RAM lenta ($currentSpeedRounded MHz -> XMP-$maxXMP)`nBuscar en YouTube: `"$cleanName enable XMP`"`nActiva XMP en BIOS (F2/F10/SUPR al encender PC)"
-        }
+		# === CONSEJO XMP MEJORADO ===
+		$script:xmpAdvice = $null
+		if ($statusText -eq "Desactivado" -and $maxXMP -gt 0 -and $script:motherboard -notin "Desconocido", "No disponible") {
+			$cleanName = Clean-MotherboardName -Name $script:motherboard
+			
+			$currentSpeedRounded = [math]::Round($currentSpeed, 0)
+			$script:xmpAdvice = "Pierdes hasta 25% FPS + stuttering por RAM lenta ($currentSpeedRounded MHz -> XMP-$maxXMP)`nBuscar en YouTube: `"$cleanName enable XMP`"`nActiva XMP en BIOS (F2/F10/SUPR al encender PC)"
+		}
 
         # === FINAL CPU-Z ===
         Log-Progress "# ----------------------------------------------------" Gray -Subsection
@@ -771,6 +771,15 @@ function Update-GPUZInfo {
                     $currentGen = $curGenRaw
                     $optimalGen = $recGenRaw
 
+                    # Detectar si está en modo ahorro de energía (Gen <= 1.1)
+                    $currentGenNum = if ($curGen -match "Gen([\d\.]+)") { [double]$matches[1] } else { 0 }
+                    $isIdlePowerSaving = ($currentGenNum -le 1.1 -and $currentGenNum -gt 0)
+
+                    # Añadir comparación Gen si no es OK y no es idle
+                    if (-not ($currentGen -eq $optimalGen) -and -not $isIdlePowerSaving) {
+                        $actual += " [Gen$currentGen vs Gen$optimalGen]"
+                    }
+
                     # Contar SOLO dGPUs
                     $dGPUCount = ($filteredCards | Where-Object { $_.ShowDetails -eq $true }).Count
                     $isMultiGPU = $dGPUCount -gt 1
@@ -781,31 +790,29 @@ function Update-GPUZInfo {
                     $optimalMultiplier = if ($genMultipliers.ContainsKey("$optimalGen")) { $genMultipliers["$optimalGen"] } else { 1 }
                     $currentBandwidth = $currentWidth * $currentMultiplier
                     $optimalBandwidth = $optimalWidth * $optimalMultiplier
+
+                    # Definir OK antes de los if
                     $widthOK = $currentWidth -eq $optimalWidth
                     $genOK = $currentGen -eq $optimalGen
                     $bandwidthOK = $currentBandwidth -ge ($optimalBandwidth * 0.5)
 
+                    $reason = ""
+                    $pcieColor = "White"  # default, se sobreescribe
+
                     if ($isMultiGPU -and $optimalWidth -eq 16 -and $currentWidth -eq 8 -and $genOK) {
                         $pcieColor = "Green"
-                    } elseif ($isMultiGPU -and $optimalWidth -eq 16 -and $currentWidth -eq 8 -and $currentGen -ge $optimalGen) {
-                        $pcieColor = "Green"
+                        $reason = " (Multi-GPU: x8 normal)"
                     } elseif ($widthOK -and $genOK) {
                         $pcieColor = "Green"
                     } elseif ($bandwidthOK -and $currentGen -ge $optimalGen) {
                         $pcieColor = "Green"
+                    } elseif ($isIdlePowerSaving) {
+                        $pcieColor = "Yellow"
+                        $actual += " (modo ahorro energia)"
+                        $reason = " -> Ejecuta Render Test en GPU-Z o un juego para ver velocidad real (Gen$([math]::Floor($optimalGen)))"
                     } else {
                         $pcieColor = "Red"
-                    }
-
-                    if (-not $genOK) {
-                        $actual += " [Gen$currentGen vs Gen$optimalGen]"
-                    }
-
-                    $reason = ""
-                    if ($pcieColor -eq "Green" -and $isMultiGPU -and $optimalWidth -eq 16 -and $currentWidth -eq 8) {
-                        $reason = " (Multi-GPU: x8 normal)"
-                    } elseif ($pcieColor -eq "Red") {
-                        if ($currentWidth -lt $optimalWidth -and $currentGen -ge $optimalGen) {
+                        if ($currentWidth -lt $optimalWidth -and $genOK) {
                             $reason = " (Ancho reducido: x$currentWidth vs x$optimalWidth)"
                         } elseif ($currentGen -lt $optimalGen) {
                             $reason = " (Gen inferior: Gen$currentGen vs Gen$optimalGen)"
@@ -821,14 +828,12 @@ function Update-GPUZInfo {
                         Color = $pcieColor
                     }
                 }
-
                 # Linea vacia entre GPUs
                 $script:gpuzInfo += [PSCustomObject]@{
                     Line = ""
                     Color = "White"
                 }
             }
-
             # Remover última linea vacia
             if ($script:gpuzInfo.Count -gt 0 -and $script:gpuzInfo[-1].Line -eq "") {
                 $script:gpuzInfo = $script:gpuzInfo[0..($script:gpuzInfo.Count-2)]
@@ -837,10 +842,7 @@ function Update-GPUZInfo {
 			$script:rebarYoutube = $null
 			$rebarOff = $script:gpuzInfo | Where-Object { $_.Line -match "ReBAR: Desactivado" }
 			if ($rebarOff -and $script:motherboard -and $script:motherboard -notmatch "Desconocido|No disponible") {
-				# Usar el nombre completo que ya detectó CPU-Z
-				$cleanName = $script:motherboard.Trim()
-				# Solo quitar parentesis si los hay y espacios sobrantes
-				$cleanName = $cleanName -replace '\s*\([^)]*\)', '' -replace '\s+$', ''
+				$cleanName = Clean-MotherboardName -Name $script:motherboard
 				$script:rebarYoutube = "$cleanName enable Resizable BAR"
 			}
             # === FINAL GPU-Z ===
@@ -894,6 +896,17 @@ function Show-RebarWarning {
         Write-Host "Activa ReBAR en BIOS (F2/F10/SUPR al encender PC)" -ForegroundColor Yellow
         Write-Host ""
     }
+}
+
+# === FUNCIÓN COMPARTIDA PARA LIMPIAR NOMBRE DE PLACA ===
+function Clean-MotherboardName {
+    param([string]$Name)
+    if ([string]::IsNullOrWhiteSpace($Name) -or $Name -in @("Desconocido","No disponible")) {
+        return $null
+    }
+    $clean = $Name.Trim()
+    $clean = $clean -replace '\s*\([^)]*\)', '' -replace '\s+$', ''
+    return $clean
 }
 
 # === DETECCIÓN FINAL DE HARDWARE ===
