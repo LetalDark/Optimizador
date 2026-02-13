@@ -206,19 +206,18 @@ function Update-CPUZInfo {
 		if (-not $skipGeneration) {
 			# === DESCARGAR Y EXTRAER CPU-Z ===
 			if (-not (Test-Path $exePath)) {
-				Log-Progress "Descargando CPU-Z..." Yellow
+				Log-Progress "Descargando y extrayendo CPU-Z..." Yellow
 				try {
 					Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 30
-					Log-Progress "Extrayendo CPU-Z..." Yellow
 					$shell = New-Object -ComObject Shell.Application
 					$zip = $shell.NameSpace($zipPath)
 					foreach ($item in $zip.Items()) { $shell.NameSpace($scriptPath).CopyHere($item, 0x14) }
 					Remove-Item $zipPath -Force
 					Start-Sleep -Milliseconds 300
 					if (-not (Test-Path $exePath)) { throw "No se encontro cpuz_x64.exe" }
-					Log-Progress "CPU-Z descargado y extraido correctamente." Green
+					Log-Progress "CPU-Z listo" Green
 				} catch {
-					$script:cpuzInfo = "Error al descargar CPU-Z"
+					$script:cpuzInfo = "Error al descargar/extraer CPU-Z"
 					$script:motherboard = "No disponible"
 					$script:xmpAdvice = $null
 					Log-Progress "ERROR: $($_.Exception.Message)" Red -Error
@@ -524,35 +523,28 @@ function Update-GPUZInfo {
 		if (-not $skipGeneration) {
 			# === DESCARGAR Y EXTRAER GPU-Z ===
 			if (-not (Test-Path $gpuzPath)) {
-				Log-Progress "Descargando GPU-Z..." Yellow
+				Log-Progress "Descargando y extrayendo GPU-Z..." Yellow
 				try {
 					Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 30
 					if (-not (Test-Path $zipPath)) { throw "ZIP no se descargo." }
-					Log-Progress "Extrayendo GPU-Z..." Yellow
 					$tempExtract = "$scriptPath\gpuz_extract"
 					if (Test-Path $tempExtract) { Remove-Item $tempExtract -Recurse -Force }
-					
-					# === EXTRAER ZIP CON FALLBACK ===
 					try {
 						Expand-Archive -Path $zipPath -DestinationPath $tempExtract -Force -ErrorAction Stop
-						Log-Progress "Extrayendo GPU-Z con Expand-Archive..." Yellow
 					} catch {
-						Log-Progress "Expand-Archive no disponible, usando metodo COM..." Yellow
 						$shell = New-Object -ComObject Shell.Application
 						$zip = $shell.NameSpace($zipPath)
 						foreach ($item in $zip.Items()) {
 							$shell.NameSpace($tempExtract).CopyHere($item, 0x14)
 						}
 					}
-					
 					$exeFile = Get-ChildItem -Path $tempExtract -Filter "GPU-Z.*.exe" -Recurse | Select-Object -First 1
 					if (-not $exeFile) { throw "No se encontro GPU-Z.*.exe en el ZIP" }
 					Move-Item $exeFile.FullName $gpuzPath -Force
 					Remove-Item $tempExtract -Recurse -Force
 					Remove-Item $zipPath -Force
-					Log-Progress "GPU-Z descargado y extraido correctamente." Green
-				}
-				catch {
+					Log-Progress "GPU-Z listo" Green
+				} catch {
 					$script:gpuzInfo = "Error al descargar/extraer GPU-Z: $($_.Exception.Message)"
 					Log-Progress "$script:gpuzInfo" Red -Error
 					return
@@ -959,56 +951,51 @@ function Initialize-NVIDIAInspector {
     Log-Progress "# # ----------------------------------------------------" Gray -Subsection
 
     # === SI NO EXISTE, DESCARGAR Y EXTRAER ===
-    if (-not (Test-Path $exePath)) {
-        # === LIMPIAR ===
-        foreach ($p in @($zipPath)) { if (Test-Path $p) { Remove-Item $p -Force } }
-        if (Test-Path $tempExtract) { Remove-Item $tempExtract -Recurse -Force }
+	if (-not (Test-Path $exePath)) {
+		Log-Progress "Descargando y extrayendo NVIDIA Profile Inspector..." Yellow
+		try {
+			# === LIMPIAR ANTES ===
+			foreach ($p in @($zipPath, $tempExtract)) { 
+				if (Test-Path $p) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue } 
+			}
 
-        # === DESCARGAR ===
-        try {
-            Log-Progress "Descargando NVIDIA Profile Inspector..." Yellow
-            Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
-            Log-Progress "Descargado OK" Green
-        } catch {
-            Log-Progress "ERROR DESCARGA" Red -Error
-            $script:nvidiaShaderCache = "Error descarga"
-            return
-        }
+			Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
+			Log-Progress "Descargado OK" Green
 
-        # === EXTRAER ===
-        try {
-            Log-Progress "Extrayendo..." Yellow
-            Expand-Archive -Path $zipPath -DestinationPath $tempExtract -Force -ErrorAction Stop
-            Log-Progress "Extraido con Expand-Archive" Green
-        } catch {
-            Log-Progress "Expand-Archive fallo, usando COM Shell..." Yellow
-            try {
-                $shell = New-Object -ComObject Shell.Application
-                $zip = $shell.NameSpace($zipPath)
-                foreach ($item in $zip.Items()) {
-                    $shell.NameSpace($tempExtract).CopyHere($item, 0x14)
-                }
-                Log-Progress "Extraido con COM Shell" Green
-            } catch {
-                Log-Progress "ERROR EXTRACCION" Red -Error
-                $script:nvidiaShaderCache = "Error extraccion"
-                return
-            }
-        }
+			# === EXTRAER ===
+			Log-Progress "Extrayendo..." Yellow
+			try {
+				Expand-Archive -Path $zipPath -DestinationPath $tempExtract -Force -ErrorAction Stop
+				Log-Progress "Extraido con Expand-Archive" Green
+			} catch {
+				Log-Progress "Expand-Archive fallo, usando COM Shell..." Yellow
+				$shell = New-Object -ComObject Shell.Application
+				$zip = $shell.NameSpace($zipPath)
+				foreach ($item in $zip.Items()) {
+					$shell.NameSpace($tempExtract).CopyHere($item, 0x14)
+				}
+				Log-Progress "Extraido con COM Shell" Green
+			}
 
-        # === MOVER ARCHIVOS ===
-        $files = Get-ChildItem -Path $tempExtract -File
-        foreach ($file in $files) {
-            Move-Item $file.FullName "$scriptPath\$($file.Name)" -Force
-        }
-        Log-Progress "Listo: $exeName + config + XML" Green
+			# === MOVER ARCHIVOS (esto NO se pierde) ===
+			$files = Get-ChildItem -Path $tempExtract -File
+			foreach ($file in $files) {
+				Move-Item $file.FullName "$scriptPath\$($file.Name)" -Force
+			}
 
-        # === LIMPIAR ===
-        Remove-Item $zipPath -Force
-        Remove-Item $tempExtract -Recurse -Force
-    } else {
-        Log-Progress "Ya descargado: $exeName" Gray
-    }
+			# === LIMPIAR ===
+			Remove-Item $zipPath -Force
+			Remove-Item $tempExtract -Recurse -Force
+
+			Log-Progress "NVIDIA Profile Inspector listo" Green
+		} catch {
+			Log-Progress "ERROR al descargar/extraer NVIDIA Profile Inspector: $($_.Exception.Message)" Red -Error
+			$script:nvidiaShaderCache = "Error descarga/extraccion"
+			return
+		}
+	} else {
+		Log-Progress "NVIDIA Profile Inspector ya listo" Gray
+	}
 
     # === PRIMERA LECTURA ===
     Log-Progress "Leyendo Shader Cache..." Yellow
@@ -1641,6 +1628,20 @@ function Get-DiskSpaceInfo {
 
     $script:systemDisk = $results | Where-Object { $_.IsSystem } | Select-Object -First 1
     $script:allDisks = $results
+	
+	# Guardar modelo del disco del sistema operativo (dinámico, no hardcodeado)
+	$script:systemDiskModel = "Desconocido"
+	if ($script:systemDisk) {
+		$systemDriveLetter = $script:systemDisk.Drive
+		$partition = Get-Partition -DriveLetter $systemDriveLetter -ErrorAction SilentlyContinue
+		if ($partition) {
+			$diskNumber = $partition.DiskNumber
+			$physicalDisk = Get-PhysicalDisk | Where-Object { $_.DeviceId -eq $diskNumber } | Select-Object -First 1
+			if ($physicalDisk) {
+				$script:systemDiskModel = $physicalDisk.FriendlyName
+			}
+		}
+	}
 }
 
 # === TEST VELOCIDAD SSD SIN DEPENDENCIAS (2025) ===
@@ -1711,7 +1712,7 @@ function Configure-CustomPagefile {
         }
     }
     if ($currentPagefileGB -ge $neededGB) {
-        if (-not $Silent) { Write-Host "`nPagefile YA tiene $currentPagefileGB GB → suficiente" -ForegroundColor Gray }
+        if (-not $Silent) { Write-Host "`nPagefile YA tiene $currentPagefileGB GB -> suficiente" -ForegroundColor Gray }
         Log-Progress "Pagefile suficiente ($currentPagefileGB GB)" Gray
         return
     }
@@ -2076,7 +2077,7 @@ function Update-Status {
     } else {
         $faltanGB = $requiredPagefileGB - $currentPagefileGB
         $faltanTexto = "$faltanGB".TrimEnd('.0')
-        $script:pagefileState = "$ramGB GB RAM + $currentPagefileGB GB pagefile (falta ~$faltanTexto GB para minimo recomendado)"
+        $script:pagefileState = "$ramGB GB RAM + $currentPagefileGB GB pagefile ($faltanTexto GB para minimo recomendado)"
         $script:pagefileColor = "Red"
     }
 
@@ -2157,15 +2158,15 @@ function Get-DynamicMenuOptions {
         }
     }
 
-    # === 6. MEMORIA VIRTUAL → Siempre visible (llegar a 32GB totales, minimo 16GB pagefile) ===
-    $options += @{
-        Number = 6
-        Key = "6"
-        Text = "Memoria Virtual: Llegar a 32GB totales (minimo 16GB en SSD)"
-        Action = {
-            Configure-CustomPagefile
-        }
-    }
+	# === OPCIÓN FIJA 6: Memoria Virtual (siempre número 6, texto simple) ===
+	$options += @{
+		Number = 6
+		Key = "6"
+		Text = "Configurar Memoria Virtual"
+		Action = {
+			Configure-CustomPagefile
+		}
+	}
 
     # === AMD SHADER CACHE (solo si hay AMD RX) ===
     if ($script:hasAMD) {
@@ -2335,6 +2336,12 @@ function Show-Menu {
     Write-Host " + Muscle memory real | + Headshots precisos" -ForegroundColor Cyan
     Write-Host ""
 
+	# === Mostrar estado de Memoria Virtual justo debajo de la opción 6 ===
+	Write-Host "6. Configurar Memoria Virtual" -ForegroundColor White
+	Write-Host "   $script:pagefileState" -ForegroundColor $script:pagefileColor
+	Write-Host "   Util en sistemas con menos de 32GB RAM (minimo 16GB)" -ForegroundColor $script:pagefileColor
+	Write-Host ""
+
     # === AMD SHADER CACHE (solo si esta en menuOptions) ===
     $amdOption = $script:menuOptions | Where-Object { $_.Text -match "AMD: Alternar Shader Cache" }
     if ($amdOption) {
@@ -2362,7 +2369,8 @@ function Show-Menu {
     # === INFO HARDWARE ===
     Write-Host "INFO Placa Base:" -ForegroundColor Cyan
     Write-Host " $script:motherboard" -ForegroundColor White
-    Write-Host ""
+	Write-Host "INFO CPU:" -ForegroundColor Cyan
+	Write-Host " $script:cpuName" -ForegroundColor White
 
     Write-Host "INFO GPU (GPU-Z):" -ForegroundColor Cyan
     if ($script:gpuzInfo) {
@@ -2373,37 +2381,30 @@ function Show-Menu {
         }
     }
     Show-RebarWarning
-    Write-Host ""
 
     Write-Host "INFO RAM (CPU-Z):" -ForegroundColor Cyan
     if ($script:cpuzInfo) {
         Write-Host " $($script:cpuzInfo.Line)" -ForegroundColor $script:cpuzInfo.Color
     }
     Show-XmpWarning
-    Write-Host ""
 
-    # === ESPACIO EN DISCO (solo sistema) ===
-    Write-Host "ESPACIO DE DISCO EN EL SISTEMA OPERATIVO" -ForegroundColor Cyan
-    if ($script:systemDisk) {
-        $freePercent = $script:systemDisk.PercentFree
-        $color = if ($freePercent -lt 20) { "Red" } elseif ($freePercent -lt 30) { "Yellow" } else { "Green" }
-        Write-Host " $($script:systemDisk.Drive): - " -NoNewline -ForegroundColor White
-        Write-Host "$freePercent% libre" -ForegroundColor $color
-        if ($freePercent -lt 20) {
-            Write-Host "ADVERTENCIA: Espacio critico. Libera espacio urgentemente." -ForegroundColor Red
-            Write-Host "Usa TreeSize Free: https://www.jam-software.com/treesize_free" -ForegroundColor Yellow
-        }
-    } else {
-        Write-Host " No se pudo detectar el disco del sistema." -ForegroundColor Red
-    }
+	Write-Host "ESPACIO DE DISCO EN EL SISTEMA OPERATIVO" -ForegroundColor Cyan
+	if ($script:systemDisk) {
+		$freePercent = $script:systemDisk.PercentFree
+		$color = if ($freePercent -lt 20) { "Red" } elseif ($freePercent -lt 30) { "Yellow" } else { "Green" }
+		
+		Write-Host " $($script:systemDisk.Drive): - " -NoNewline -ForegroundColor White
+		Write-Host "$freePercent% libre " -NoNewline -ForegroundColor $color
+		Write-Host "(Modelo: $script:systemDiskModel)" -ForegroundColor White
+		
+		if ($freePercent -lt 20) {
+			Write-Host "ADVERTENCIA: Espacio critico. Libera espacio urgentemente." -ForegroundColor Red
+			Write-Host "Usa TreeSize Free: https://www.jam-software.com/treesize_free" -ForegroundColor Yellow
+		}
+	} else {
+		Write-Host " No se pudo detectar el disco del sistema." -ForegroundColor Red
+	}
     Write-Host ""
-	
-	Write-Host "MEMORIA VIRTUAL" -ForegroundColor Cyan
-    Write-Host "Configuracion actual -> " -NoNewline -ForegroundColor White
-    Write-Host "$script:pagefileState" -ForegroundColor $script:pagefileColor
-    Write-Host " Util en sistemas con menos de 32GB RAM (minimo 16GB pagefile aunque tengas 128GB RAM)" -ForegroundColor Cyan
-    Write-Host ""
-
     Write-Host "$script:backupInfo" -ForegroundColor Cyan
     Write-Host ""
 
@@ -2472,6 +2473,10 @@ $script:hasNVIDIA = $false
 $script:exitMenu = $false
 $script:mouseHz = $null
 $script:mouseTested = $false
+
+# === OBTENER NOMBRE DE LA CPU ===
+$cpuNameRaw = wmic cpu get name | Select-Object -Skip 1 | Where-Object { $_ -match '\S' } | ForEach-Object { $_.Trim() }
+$script:cpuName = if ($cpuNameRaw) { $cpuNameRaw -join " / " } else { "No detectado" }
 
 # === INICIO ===
 Set-ConsoleZoomAndMaximize
