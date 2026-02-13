@@ -2414,13 +2414,14 @@ function Show-Menu {
 
 	Write-Host "INFO RAM (CPU-Z):" -ForegroundColor Cyan
 	if ($script:cpuzInfo) {
-		# Parte estática en blanco
+		# Parte estática: todo hasta antes de "Actual:"
 		$staticPart = $script:cpuzInfo.Line -replace "Actual:.*", ""
-		$staticPart = $staticPart.TrimEnd(" |")
+		$staticPart = $staticPart.TrimEnd(" |")   # quita el | sobrante al final
 		Write-Host " $staticPart" -ForegroundColor White
 
-		# Parte dinámica (Actual + status) con el color del status
+		# Parte dinámica: desde "Actual:" hasta el final, pero cambiamos "->" por "| XMP:"
 		$dynamicPart = $script:cpuzInfo.Line -replace "^.*Actual:", "Actual:"
+		$dynamicPart = $dynamicPart -replace " -> ", " | XMP: "   # ← aquí está la magia
 		Write-Host " $dynamicPart" -ForegroundColor $script:cpuzInfo.Color
 	}
 	Show-XmpWarning
