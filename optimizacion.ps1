@@ -2320,7 +2320,7 @@ function Show-Menu {
     Write-Host "1. DirectStorage -> " -NoNewline -ForegroundColor White
     Write-Host "$script:estado1" -NoNewline -ForegroundColor $color1
     Write-Host " (Recomendado Activado)" -ForegroundColor Yellow
-    Write-Host " DirectStorage es una tecnologia de Microsoft que mejora los tiempos de carga de los juegos al permitir que la tarjeta grafica acceda directamente a los datos del SSD / Puede causar inestabilidad o crasheos en Vulkan" -ForegroundColor Gray
+    Write-Host " DirectStorage es una tecnologia de Microsoft que mejora los tiempos de carga de los juegos al permitir que la tarjeta grafica acceda directamente a los datos del SSD" -ForegroundColor Gray
     Write-Host ""
 
     $color2 = if ($script:estado2 -eq "Desactivado") { "Green" } else { "Red" }
@@ -2563,3 +2563,4 @@ do {
 
 # === LLAMADA AL MENÚ FINAL ===
 Show-FinalMenu
+
