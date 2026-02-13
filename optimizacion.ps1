@@ -464,8 +464,11 @@ function Update-CPUZInfo {
             $statusColor = "Red" 
         }
 
-        $line = "RAM | XMP-$maxXMP | Actual: $currentSpeed MHz (x2 = $effectiveSpeed) -> $statusText"
-        $script:cpuzInfo = [PSCustomObject]@{ Line = $line; Color = $statusColor }
+		# Obtener RAM total en GB (ya calculada en Get-PhysicalRAM, pero la llamamos aquí por seguridad)
+		$ramGB = [math]::Round((Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property Capacity -Sum).Sum / 1GB, 0)
+
+		$line = "${ramGB}GB RAM | XMP-$maxXMP | Actual: $currentSpeed MHz (x2 = $effectiveSpeed) -> $statusText"
+		$script:cpuzInfo = [PSCustomObject]@{ Line = $line; Color = $statusColor }
 		# === CONSEJO XMP MEJORADO ===
 		$script:xmpAdvice = $null
 		if ($statusText -eq "Desactivado" -and $maxXMP -gt 0 -and $script:motherboard -notin "Desconocido", "No disponible") {
@@ -830,6 +833,18 @@ function Update-GPUZInfo {
             if ($script:gpuzInfo.Count -gt 0 -and $script:gpuzInfo[-1].Line -eq "") {
                 $script:gpuzInfo = $script:gpuzInfo[0..($script:gpuzInfo.Count-2)]
             }
+			
+			# === EXTRAER SOLO LA VRAM REAL DEL XML DE GPU-Z (solo los GB) ===
+			$script:gpuVramInfo = @()
+			foreach ($filteredCard in $filteredCards) {
+				$card = $filteredCard.Card
+				$vramMB = $card.memsize -replace "[^0-9]", ""   # "16384" → 16384
+				$vramGB = if ($vramMB) { [math]::Round([int64]$vramMB / 1024, 0) } else { "??" }
+				$script:gpuVramInfo += "$vramGB GB"
+			}
+			$script:gpuVramInfo = $script:gpuVramInfo -join "`n"
+			if (-not $script:gpuVramInfo) { $script:gpuVramInfo = "No detectada" }
+			
 			# === CONSEJO REBAR MEJORADO ===
 			$script:rebarYoutube = $null
 			$rebarOff = $script:gpuzInfo | Where-Object { $_.Line -match "ReBAR: Desactivado" }
@@ -2366,21 +2381,30 @@ function Show-Menu {
 		Write-Host ""
 	}
 
-    # === INFO HARDWARE ===
-    Write-Host "INFO Placa Base:" -ForegroundColor Cyan
-    Write-Host " $script:motherboard" -ForegroundColor White
-	Write-Host "INFO CPU:" -ForegroundColor Cyan
-	Write-Host " $script:cpuName" -ForegroundColor White
-
-    Write-Host "INFO GPU (GPU-Z):" -ForegroundColor Cyan
-    if ($script:gpuzInfo) {
-        foreach ($info in $script:gpuzInfo) {
-            if ($info.Line.Trim() -ne "") {
-                Write-Host " $($info.Line)" -ForegroundColor $info.Color
-            }
-        }
-    }
-    Show-RebarWarning
+	Write-Host "INFO GPU (GPU-Z):" -ForegroundColor Cyan
+	if ($script:gpuzInfo) {
+		$vramLines = $script:gpuVramInfo -split "`n"
+		$vramIndex = 0
+		foreach ($info in $script:gpuzInfo) {
+			$line = $info.Line.Trim()
+			if ($line -ne "") {
+				# Solo en la línea del nombre de GPU: formatear como "Nombre - VRAM: XX GB"
+				if ($line -match "^(NVIDIA|AMD|GeForce|Radeon|RTX|RX|Intel|Arc)") {
+					if ($vramIndex -lt $vramLines.Count) {
+						$vram = $vramLines[$vramIndex].Trim()
+						# Limpiar cualquier VRAM vieja si había
+						$line = $line -replace "\s+\d+ GB$", ""
+						$line = $line.TrimEnd()
+						# Formato final: Nombre - VRAM: XX GB
+						$line = "$line - VRAM: $vram"
+					}
+					$vramIndex++
+				}
+				Write-Host " $line" -ForegroundColor $info.Color
+			}
+		}
+	}
+	Show-RebarWarning
 
     Write-Host "INFO RAM (CPU-Z):" -ForegroundColor Cyan
     if ($script:cpuzInfo) {
