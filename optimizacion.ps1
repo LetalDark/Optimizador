@@ -2392,16 +2392,17 @@ function Show-Menu {
 		$vramLines = $script:gpuVramInfo -split "`n"
 		$vramIndex = 0
 		foreach ($info in $script:gpuzInfo) {
+			# Saltar si es null o no tiene Line
+			if (-not $info -or -not $info.Line) { continue }
+
 			$line = $info.Line.Trim()
 			if ($line -ne "") {
-				# Solo en la línea del nombre de GPU: formatear como "Nombre - VRAM: XX GB"
+				# Solo en la línea del nombre de GPU: formatear VRAM
 				if ($line -match "^(NVIDIA|AMD|GeForce|Radeon|RTX|RX|Intel|Arc)") {
 					if ($vramIndex -lt $vramLines.Count) {
 						$vram = $vramLines[$vramIndex].Trim()
-						# Limpiar cualquier VRAM vieja si había
-						$line = $line -replace "\s+\d+ GB$", ""
+						$line = $line -replace "\s+\d+ GB$", ""   # limpia VRAM vieja si había
 						$line = $line.TrimEnd()
-						# Formato final: Nombre - VRAM: XX GB
 						$line = "$line - VRAM: $vram"
 					}
 					$vramIndex++
@@ -2409,6 +2410,8 @@ function Show-Menu {
 				Write-Host " $line" -ForegroundColor $info.Color
 			}
 		}
+	} else {
+		Write-Host " No se detectaron GPUs (GPU-Z falló o no hay datos)" -ForegroundColor Yellow
 	}
 	Show-RebarWarning
 
