@@ -447,6 +447,10 @@ function Update-CPUZInfo {
         }
         
         $maxXMP = if ($xmpProfiles.Count -gt 0) { ($xmpProfiles | Sort-Object -Descending)[0] } else { 0 }
+		if ($maxXMP -eq 0) {
+			$statusText = "No disponible / Sin soporte BIOS"
+			$statusColor = "Yellow"
+		}
         $effectiveSpeed = [math]::Round($currentSpeed * 2, 0)
         
         # Determinar estado XMP (variables separadas)
@@ -2388,7 +2392,7 @@ function Show-Menu {
 	Write-Host " $script:cpuName" -ForegroundColor White
 
 	Write-Host "INFO GPU (GPU-Z):" -ForegroundColor Cyan
-	if ($script:gpuzInfo) {
+	if ($script:gpuzInfo -and ($script:gpuzInfo | Where-Object { $_.Line -and $_.Line.Trim() -ne "" }).Count -gt 0) {
 		$vramLines = $script:gpuVramInfo -split "`n"
 		$vramIndex = 0
 		foreach ($info in $script:gpuzInfo) {
@@ -2436,7 +2440,7 @@ function Show-Menu {
 		
 		Write-Host " $($script:systemDisk.Drive): - " -NoNewline -ForegroundColor White
 		Write-Host "$freePercent% libre " -NoNewline -ForegroundColor $color
-		Write-Host "(Modelo: $script:systemDiskModel)" -ForegroundColor White
+		Write-Host "($script:systemDiskModel)" -ForegroundColor White
 		
 		if ($freePercent -lt 20) {
 			Write-Host "ADVERTENCIA: Espacio critico. Libera espacio urgentemente." -ForegroundColor Red
