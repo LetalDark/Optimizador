@@ -878,45 +878,31 @@ function Update-GPUZInfo {
             Log-Progress "$script:gpuzInfo" Red -Error
         }
 
-    } catch {
-		$script:gpuzInfo = "Error GPU-Z: $($_.Exception.Message)"
-				Log-Progress "$script:gpuzInfo" Red -Error
+	} catch {
+            $script:gpuzInfo = "Error GPU-Z: $($_.Exception.Message)"
+            Log-Progress "$script:gpuzInfo" Red -Error
 
-				# === FALLBACK HÍBRIDO SI GPU-Z FALLÓ O NO DETECTÓ NADA ===
-				if (-not $script:gpuzInfo -or $script:gpuzInfo.Count -eq 0 -or ($script:gpuzInfo | Where-Object { $_.Line.Trim() -ne "" -and -not $_.Line.Contains("Error") }).Count -eq 0) {
-					$script:gpuzInfo = @()
-					$seenNames = @()
+            # === FALLBACK HÍBRIDO SI GPU-Z FALLÓ O NO DETECTÓ NADA ===
+            if (-not $script:gpuzInfo -or $script:gpuzInfo.Count -eq 0 -or 
+                ($script:gpuzInfo | Where-Object { $_.Line.Trim() -ne "" -and -not $_.Line.Contains("Error") }).Count -eq 0) 
+            {
+                $script:gpuzInfo = @()
+                $seenNames = @()
 
-					# 1. Intentar nvidia-smi para NVIDIA (VRAM precisa)
-					try {
-						$nvidiaOutput = nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>$null
-						if ($nvidiaOutput) {
-							$parts = $nvidiaOutput.Split(',')
-							$nvidiaName = $parts[0].Trim()
-							$vramMB = $parts[1].Trim()
-							$vramGB = [math]::Round($vramMB / 1024, 0)
-							$script:gpuzInfo += [PSCustomObject]@{ Line = "$nvidiaName - VRAM: $vramGB GB"; Color = "Yellow" }
-							$script:gpuzInfo += [PSCustomObject]@{ Line = " (Fallback nvidia-smi - VRAM precisa)"; Color = "Gray" }
-							$script:gpuzInfo += [PSCustomObject]@{ Line = ""; Color = "White" }
-							$seenNames += $nvidiaName
-						}
-					} catch {}
+                # 1. NVIDIA vía nvidia-smi
+                Get-NvidiaFallbackInfo -seenNames ([ref]$seenNames)
 
-					# 2. Fallback WMI para GPUs restantes (solo nombre, evita duplicados)
-					try {
-						Get-CimInstance Win32_VideoController | Where-Object {
-							$_.Name -match "NVIDIA|AMD|Radeon|GeForce|RTX|RX" -and $_.Name -notin $seenNames
-						} | Sort-Object Name | ForEach-Object {
-							$script:gpuzInfo += [PSCustomObject]@{ Line = $_.Name; Color = "Yellow" }
-							$script:gpuzInfo += [PSCustomObject]@{ Line = " (Fallback WMI - nombre solo)"; Color = "Gray" }
-							$script:gpuzInfo += [PSCustomObject]@{ Line = ""; Color = "White" }
-						}
-					} catch {}
+                # 2. WMI para el resto (evita duplicados)
+                Get-WmiFallbackGPUs -seenNames ([ref]$seenNames)
 
-					if ($script:gpuzInfo.Count -eq 0) {
-						$script:gpuzInfo += [PSCustomObject]@{ Line = "No se detectaron GPUs dedicadas"; Color = "Yellow" }
-					}
-				}
+                # Si todavía no hay nada → mensaje genérico
+                if ($script:gpuzInfo.Count -eq 0) {
+                    $script:gpuzInfo += [PSCustomObject]@{
+                        Line  = "No se detectaron GPUs dedicadas"
+                        Color = "Yellow"
+                    }
+                }
+            }
     } finally {
         # Limpieza final - asegurarse de que GPU-Z este cerrado
         try {
@@ -942,6 +928,86 @@ function Show-RebarWarning {
         Write-Host "Buscar en YouTube: `"$script:rebarYoutube`"" -ForegroundColor Yellow
         Write-Host "Activa ReBAR en BIOS (F2/F10/SUPR al encender PC)" -ForegroundColor Yellow
         Write-Host ""
+    }
+}
+
+# === nvidia-smi (solo NVIDIA) ===
+function Get-NvidiaFallbackInfo {
+    param(
+        [ref]$seenNames
+    )
+
+    $script:gpuzInfo = @($script:gpuzInfo)  # aseguramos que sea array
+
+    try {
+        $nvidiaOutput = nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>$null
+        if (-not $nvidiaOutput) { return }
+
+        $parts = $nvidiaOutput -split ',' | ForEach-Object { $_.Trim() }
+        if ($parts.Count -lt 2) { return }
+
+        $name = $parts[0]
+        $vramMB = $parts[1] -as [int64]
+        if (-not $vramMB) { return }
+
+        $vramGB = [math]::Round($vramMB / 1024, 0)
+
+        $script:gpuzInfo += [PSCustomObject]@{
+            Line  = "$name - VRAM: $vramGB GB"
+            Color = "Yellow"
+        }
+        $script:gpuzInfo += [PSCustomObject]@{
+            Line  = " (Fallback nvidia-smi - VRAM precisa)"
+            Color = "Gray"
+        }
+        $script:gpuzInfo += [PSCustomObject]@{
+            Line  = ""
+            Color = "White"
+        }
+
+        $seenNames.Value += $name
+    }
+    catch {
+        # silencioso
+    }
+}
+
+# === WMI para cualquier GPU===
+function Get-WmiFallbackGPUs {
+    param(
+        [ref]$seenNames
+    )
+
+    $script:gpuzInfo = @($script:gpuzInfo)
+
+    try {
+        $controllers = Get-CimInstance Win32_VideoController -ErrorAction Stop |
+            Where-Object {
+                $_.Name -match '(?i)NVIDIA|AMD|Radeon|GeForce|RTX|RX' -and
+                $_.Name -notin $seenNames.Value
+            } |
+            Sort-Object Name
+
+        foreach ($ctrl in $controllers) {
+            $script:gpuzInfo += [PSCustomObject]@{
+                Line  = $ctrl.Name
+                Color = "Yellow"
+            }
+            $script:gpuzInfo += [PSCustomObject]@{
+                Line  = " (Fallback WMI - nombre solo)"
+                Color = "Gray"
+            }
+            $script:gpuzInfo += [PSCustomObject]@{
+                Line  = ""
+                Color = "White"
+            }
+
+            # Opcional: añadir al seenNames para evitar duplicados raros
+            # $seenNames.Value += $ctrl.Name
+        }
+    }
+    catch {
+        # silencioso
     }
 }
 
