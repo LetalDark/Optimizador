@@ -528,7 +528,7 @@ function Update-GPUZInfo {
         }
 
         if (-not $skipGeneration) {
-            # === DESCARGAR Y EXTRAER GPU-Z ===
+            # DESCARGAR Y EXTRAER GPU-Z (version que funcionaba)
             if (-not (Test-Path $gpuzPath)) {
                 Log-Progress "Descargando y extrayendo GPU-Z..." Yellow
                 try {
@@ -558,11 +558,9 @@ function Update-GPUZInfo {
                 }
             }
 
-            # === INICIO GPU-Z ===
             Log-Progress "# INICIANDO GPU-Z" Cyan -Subsection
             Log-Progress "# ----------------------------------------------------" Gray -Subsection
 
-            # === EJECUTAR GPU-Z ===
             Log-Progress "# Ejecutando GPU-Z..." Cyan -Subsection
             if (Test-Path $xmlPath) { Remove-Item $xmlPath -Force }
             $process = Start-Process -FilePath $gpuzPath -ArgumentList "-dump `"$xmlPath`"" -PassThru -WindowStyle Hidden
@@ -573,7 +571,6 @@ function Update-GPUZInfo {
             }
             Log-Progress "# GENERANDO GPUZ.XML" Yellow -Subsection
 
-            # === ESPERA MEJORADA: HASTA </gpuz_dump> ===
             $maxWait = 60
             $xmlReady = $false
             $lastSize = 0
@@ -672,23 +669,24 @@ function Update-GPUZInfo {
             }
         }
 
-        # === PROCESAMIENTO PRINCIPAL ===
+        # PROCESAMIENTO PRINCIPAL
         Log-Progress "# PROCESANDO INFORMACION DE GPU..." Yellow -Subsection
 
         $script:gpuzInfo = @()
         $hasUsefulData = $false
 
         try {
-            [xml]$xml = Get-Content $xmlPath -Raw -ErrorAction Stop
-            Log-Progress "DEBUG: XML parseado correctamente (tamaño: $((Get-Content $xmlPath -Raw -ErrorAction SilentlyContinue).Length) bytes)" Magenta -Subsection
+            # Lectura segura con bytes + ISO-8859-1
+            $bytes = [System.IO.File]::ReadAllBytes($xmlPath)
+            $content = [System.Text.Encoding]::GetEncoding(28591).GetString($bytes)
+            [xml]$xml = $content
 
             $cards = $xml.gpuz_dump.card
-            Log-Progress "DEBUG: Cards encontradas en XML: $($cards.Count)" Magenta -Subsection
+            $cardCount = if ($cards) { if ($cards.Count) { $cards.Count } else { 1 } } else { 0 }
 
-            if ($cards -and $cards.Count -gt 0) {
+            if ($cardCount -gt 0) {
                 $hasUsefulData = $true
 
-                # CLASIFICAR TODAS LAS GPUs
                 $filteredCards = @()
                 foreach ($card in $cards) {
                     $gpuType = Get-GPUType -gpuName $card.cardname
@@ -710,7 +708,6 @@ function Update-GPUZInfo {
                     }
 
                     if ($filteredCard.ShowDetails) {
-                        # ReBAR
                         $rebar = if ($card.resizablebar -eq "Enabled") { "Activado" } else { "Desactivado" }
                         $rebarColor = if ($card.resizablebar -eq "Enabled") { "Green" } else { "Red" }
                         $script:gpuzInfo += [PSCustomObject]@{
@@ -718,7 +715,6 @@ function Update-GPUZInfo {
                             Color = $rebarColor
                         }
 
-                        # PCIe
                         $maxMatch = [regex]::Match($card.businterface, "x(\d+)\s+([\d\.]+)")
                         $recWidth = if ($maxMatch.Success) { "x$($maxMatch.Groups[1].Value)" } else { "x?" }
                         $recGenRaw = if ($maxMatch.Success) { [double]$maxMatch.Groups[2].Value } else { 0 }
@@ -813,7 +809,6 @@ function Update-GPUZInfo {
                     $script:gpuzInfo = $script:gpuzInfo[0..($script:gpuzInfo.Count-2)]
                 }
 
-                # === EXTRAER VRAM ===
                 $script:gpuVramInfo = @()
                 foreach ($filteredCard in $filteredCards) {
                     $card = $filteredCard.Card
@@ -824,7 +819,6 @@ function Update-GPUZInfo {
                 $script:gpuVramInfo = $script:gpuVramInfo -join "`n"
                 if (-not $script:gpuVramInfo) { $script:gpuVramInfo = "No detectada" }
 
-                # === CONSEJO REBAR ===
                 $script:rebarYoutube = $null
                 $rebarOff = $script:gpuzInfo | Where-Object { $_.Line -match "ReBAR: Desactivado" }
                 if ($rebarOff -and $script:motherboard -and $script:motherboard -notmatch "Desconocido|No disponible") {
@@ -847,28 +841,16 @@ function Update-GPUZInfo {
                 }
                 Log-Progress "# -------------------------------------------------------------------" Gray -Subsection
             } else {
-                Log-Progress "DEBUG: XML parseado pero sin tarjetas GPU válidas" Yellow -Subsection
+                Log-Progress "DEBUG: XML parseado pero sin tarjetas GPU validas" Yellow -Subsection
             }
         } catch {
             $script:gpuzInfo = "Error procesando XML de GPU-Z: $($_.Exception.Message)"
             Log-Progress "$script:gpuzInfo" Red -Error
         }
 
-        # === CHEQUEO FINAL + FALLBACK (se ejecuta SIEMPRE) ===
-        Log-Progress "DEBUG: Estado final antes de fallback → gpuzInfo.Count = $($script:gpuzInfo.Count)" Magenta -Subsection
-
-        $hasUsefulData = $false
-        if ($script:gpuzInfo -and $script:gpuzInfo.Count -gt 0) {
-            $useful = $script:gpuzInfo | Where-Object {
-                $_.Line.Trim() -ne "" -and
-                $_.Line -notmatch '(?i)error|no se pudo|timeout|falló|procesando'
-            }
-            $hasUsefulData = $useful.Count -gt 0
-            Log-Progress "DEBUG: Líneas útiles encontradas: $($useful.Count)" Magenta -Subsection
-        }
-
+        # CHEQUEO FINAL + FALLBACK
         if (-not $hasUsefulData) {
-            Log-Progress "GPU-Z no proporcionó datos útiles → activando fallback híbrido" Yellow -Subsection
+            Log-Progress "GPU-Z no proporciono datos utiles -> activando fallback hibrido" Yellow -Subsection
 
             $script:gpuzInfo = @()
             $seenNames = @()
@@ -878,15 +860,12 @@ function Update-GPUZInfo {
 
             if ($script:gpuzInfo.Count -eq 0) {
                 $script:gpuzInfo += [PSCustomObject]@{
-                    Line  = "No se detectaron GPUs dedicadas"
+                    Line = "No se detectaron GPUs dedicadas"
                     Color = "Yellow"
                 }
             }
-        } else {
-            Log-Progress "DEBUG: Datos útiles detectados → no se necesita fallback" Cyan -Subsection
         }
 
-        # === Limpieza final ===
         try {
             $processes = Get-Process -Name "GPU-Z*" -ErrorAction SilentlyContinue
             foreach ($proc in $processes) {
@@ -895,9 +874,7 @@ function Update-GPUZInfo {
                     Start-Sleep -Milliseconds 200
                 }
             }
-        } catch {
-            # Ignorar errores en limpieza
-        }
+        } catch { }
     } catch {
         $script:gpuzInfo = "Error GPU-Z general: $($_.Exception.Message)"
         Log-Progress "$script:gpuzInfo" Red -Error
