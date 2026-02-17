@@ -515,396 +515,378 @@ function Update-GPUZInfo {
         if (-not $scriptPath) { $scriptPath = (Get-Location).Path }
         $gpuzPath = "$scriptPath\gpuz.exe"
         $xmlPath = "$scriptPath\gpuz.xml"
-        $zipUrl = "https://ftp.nluug.nl/pub/games/PC/guru3d/generic/GPU-Z-[Guru3D.com].zip"
+        $zipUrl = "https://download-eu2.guru3d.com/generic/GPU-Z-[Guru3D.com].zip"
         $zipPath = "$scriptPath\gpuz_temp.zip"
-		
-		$skipGeneration = $false
-		if (-not $script:MustRegenerateTools -and (Test-Path $xmlPath)) {
-			$fileAge = (Get-Date) - (Get-Item $xmlPath).LastWriteTime
-			if ($fileAge.TotalHours -lt 48) {
-				Log-Progress "# Reutilizando gpuz.xml existente (sin reinicio)" Green -Subsection
-				$skipGeneration = $true
-			}
-		}
 
-		if (-not $skipGeneration) {
-			# === DESCARGAR Y EXTRAER GPU-Z ===
-			if (-not (Test-Path $gpuzPath)) {
-				Log-Progress "Descargando y extrayendo GPU-Z..." Yellow
-				try {
-					Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 30
-					if (-not (Test-Path $zipPath)) { throw "ZIP no se descargo." }
-					$tempExtract = "$scriptPath\gpuz_extract"
-					if (Test-Path $tempExtract) { Remove-Item $tempExtract -Recurse -Force }
-					try {
-						Expand-Archive -Path $zipPath -DestinationPath $tempExtract -Force -ErrorAction Stop
-					} catch {
-						$shell = New-Object -ComObject Shell.Application
-						$zip = $shell.NameSpace($zipPath)
-						foreach ($item in $zip.Items()) {
-							$shell.NameSpace($tempExtract).CopyHere($item, 0x14)
-						}
-					}
-					$exeFile = Get-ChildItem -Path $tempExtract -Filter "GPU-Z.*.exe" -Recurse | Select-Object -First 1
-					if (-not $exeFile) { throw "No se encontro GPU-Z.*.exe en el ZIP" }
-					Move-Item $exeFile.FullName $gpuzPath -Force
-					Remove-Item $tempExtract -Recurse -Force
-					Remove-Item $zipPath -Force
-					Log-Progress "GPU-Z listo" Green
-				} catch {
-					$script:gpuzInfo = "Error al descargar/extraer GPU-Z: $($_.Exception.Message)"
-					Log-Progress "$script:gpuzInfo" Red -Error
-					return
-				}
-			}
+        $skipGeneration = $false
+        if (-not $script:MustRegenerateTools -and (Test-Path $xmlPath)) {
+            $fileAge = (Get-Date) - (Get-Item $xmlPath).LastWriteTime
+            if ($fileAge.TotalHours -lt 48) {
+                Log-Progress "# Reutilizando gpuz.xml existente (sin reinicio)" Green -Subsection
+                $skipGeneration = $true
+            }
+        }
 
-			# === INICIO GPU-Z ===
-			Log-Progress "# INICIANDO GPU-Z" Cyan -Subsection
-			Log-Progress "# ----------------------------------------------------" Gray -Subsection
+        if (-not $skipGeneration) {
+            # === DESCARGAR Y EXTRAER GPU-Z ===
+            if (-not (Test-Path $gpuzPath)) {
+                Log-Progress "Descargando y extrayendo GPU-Z..." Yellow
+                try {
+                    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing -TimeoutSec 30
+                    if (-not (Test-Path $zipPath)) { throw "ZIP no se descargo." }
+                    $tempExtract = "$scriptPath\gpuz_extract"
+                    if (Test-Path $tempExtract) { Remove-Item $tempExtract -Recurse -Force }
+                    try {
+                        Expand-Archive -Path $zipPath -DestinationPath $tempExtract -Force -ErrorAction Stop
+                    } catch {
+                        $shell = New-Object -ComObject Shell.Application
+                        $zip = $shell.NameSpace($zipPath)
+                        foreach ($item in $zip.Items()) {
+                            $shell.NameSpace($tempExtract).CopyHere($item, 0x14)
+                        }
+                    }
+                    $exeFile = Get-ChildItem -Path $tempExtract -Filter "GPU-Z.*.exe" -Recurse | Select-Object -First 1
+                    if (-not $exeFile) { throw "No se encontro GPU-Z.*.exe en el ZIP" }
+                    Move-Item $exeFile.FullName $gpuzPath -Force
+                    Remove-Item $tempExtract -Recurse -Force
+                    Remove-Item $zipPath -Force
+                    Log-Progress "GPU-Z listo" Green
+                } catch {
+                    $script:gpuzInfo = "Error al descargar/extraer GPU-Z: $($_.Exception.Message)"
+                    Log-Progress "$script:gpuzInfo" Red -Error
+                    return
+                }
+            }
 
-			# === EJECUTAR GPU-Z ===
-			Log-Progress "# Ejecutando GPU-Z..." Cyan -Subsection
-			if (Test-Path $xmlPath) { Remove-Item $xmlPath -Force }
-			
-			$process = Start-Process -FilePath $gpuzPath -ArgumentList "-dump `"$xmlPath`"" -PassThru -WindowStyle Hidden
-			if (-not $process) {
-				$script:gpuzInfo = "Error: No se pudo iniciar GPU-Z"
-				Log-Progress "$script:gpuzInfo" Red -Error
-				return
-			}
+            # === INICIO GPU-Z ===
+            Log-Progress "# INICIANDO GPU-Z" Cyan -Subsection
+            Log-Progress "# ----------------------------------------------------" Gray -Subsection
 
-			Log-Progress "# GENERANDO GPUZ.XML" Yellow -Subsection
+            # === EJECUTAR GPU-Z ===
+            Log-Progress "# Ejecutando GPU-Z..." Cyan -Subsection
+            if (Test-Path $xmlPath) { Remove-Item $xmlPath -Force }
+            $process = Start-Process -FilePath $gpuzPath -ArgumentList "-dump `"$xmlPath`"" -PassThru -WindowStyle Hidden
+            if (-not $process) {
+                $script:gpuzInfo = "Error: No se pudo iniciar GPU-Z"
+                Log-Progress "$script:gpuzInfo" Red -Error
+                return
+            }
+            Log-Progress "# GENERANDO GPUZ.XML" Yellow -Subsection
 
-			# === ESPERA MEJORADA: HASTA </gpuz_dump> ===
-			$maxWait = 60
-			$xmlReady = $false
-			$lastSize = 0
-			$stableCount = 0
+            # === ESPERA MEJORADA: HASTA </gpuz_dump> ===
+            $maxWait = 60
+            $xmlReady = $false
+            $lastSize = 0
+            $stableCount = 0
+            for ($i = 0; $i -lt $maxWait; $i++) {
+                Start-Sleep -Seconds 1
+                if (-not (Test-Path $xmlPath)) {
+                    if ($i % 5 -eq 0) {
+                        Log-Progress "# Esperando generacion de XML... ($i/$maxWait segundos)" DarkGray -Subsection
+                    }
+                    continue
+                }
+                $fileSize = (Get-Item $xmlPath).Length
+                try {
+                    $reader = [System.IO.StreamReader]::new($xmlPath)
+                    $content = $reader.ReadToEnd()
+                    $reader.Close()
+                    if ($content -match '</gpuz_dump>\s*$') {
+                        Log-Progress "# XML COMPLETO: </gpuz_dump> detectado ($i segundos, $fileSize bytes)" Green -Subsection
+                        try {
+                            [xml]$xmlDoc = $content
+                            if ($null -eq $xmlDoc.gpuz_dump -or $null -eq $xmlDoc.gpuz_dump.card) {
+                                Log-Progress "# XML completo pero sin datos de GPU" Yellow -Subsection
+                                continue
+                            }
+                            $valid = $false
+                            foreach ($c in $xmlDoc.gpuz_dump.card) {
+                                if (-not [string]::IsNullOrWhiteSpace($c.cardname)) {
+                                    $valid = $true
+                                    break
+                                }
+                            }
+                            if (-not $valid) {
+                                Log-Progress "# XML sin nombre de GPU valido" Yellow -Subsection
+                                continue
+                            }
+                            $xmlReady = $true
+                            Log-Progress "# XML VALIDO Y COMPLETO" Green -Subsection
+                            if (-not $process.HasExited) {
+                                Log-Progress "# Cerrando GPU-Z..." DarkGray -Subsection
+                                $process.CloseMainWindow() | Out-Null
+                                Start-Sleep -Milliseconds 500
+                                if (-not $process.HasExited) {
+                                    $process.Kill()
+                                    Start-Sleep -Milliseconds 300
+                                }
+                            }
+                            break
+                        } catch {
+                            Log-Progress "# Error parseando XML completo: $($_.Exception.Message)" Red -Subsection
+                        }
+                    } else {
+                        if ($fileSize -eq $lastSize) {
+                            $stableCount++
+                            if ($stableCount -gt 5 -and $fileSize -gt 2048) {
+                                Log-Progress "# Archivo estable pero sin cierre. Forzando lectura..." Yellow -Subsection
+                                try {
+                                    if ($content -match '<cardname>' -and $content.Length -gt 1000) {
+                                        [xml]$xmlDoc = $content
+                                        if ($xmlDoc.gpuz_dump.card) {
+                                            $xmlReady = $true
+                                            Log-Progress "# XML parcial pero usable" Yellow -Subsection
+                                            if (-not $process.HasExited) {
+                                                $process.Kill()
+                                                Start-Sleep -Milliseconds 300
+                                            }
+                                            break
+                                        }
+                                    }
+                                } catch {
+                                    Log-Progress "# Error parseando XML parcial: $($_.Exception.Message)" Red -Subsection
+                                }
+                            }
+                        } else {
+                            $stableCount = 0
+                            $lastSize = $fileSize
+                        }
+                        if ($i % 5 -eq 0) {
+                            Log-Progress "# GPU-Z escribiendo... ($fileSize bytes, esperando </gpuz_dump>)" DarkGray -Subsection
+                        }
+                    }
+                } catch {
+                    if ($i % 5 -eq 0) {
+                        Log-Progress "# Leyendo archivo... ($i segundos)" DarkGray -Subsection
+                    }
+                }
+            }
 
-			for ($i = 0; $i -lt $maxWait; $i++) {
-				Start-Sleep -Seconds 1
+            if (-not $xmlReady) {
+                if (-not $process.HasExited) {
+                    $process.Kill()
+                    Start-Sleep -Milliseconds 300
+                }
+                $script:gpuzInfo = "Error: No se pudo generar XML valido de GPU-Z"
+                Log-Progress "$script:gpuzInfo" Red -Error
+            }
+        }
 
-				# === VERIFICAR SI EL ARCHIVO EXISTE ===
-				if (-not (Test-Path $xmlPath)) {
-					if ($i % 5 -eq 0) {
-						Log-Progress "# Esperando generacion de XML... ($i/$maxWait segundos)" DarkGray -Subsection
-					}
-					continue
-				}
-
-				$fileSize = (Get-Item $xmlPath).Length
-
-				# === VERIFICAR SI EL ARCHIVO TERMINA CON </gpuz_dump> ===
-				try {
-					# Usar StreamReader para evitar problemas de bloqueo
-					$reader = [System.IO.StreamReader]::new($xmlPath)
-					$content = $reader.ReadToEnd()
-					$reader.Close()
-
-					if ($content -match '</gpuz_dump>\s*$') {
-						Log-Progress "# XML COMPLETO: </gpuz_dump> detectado ($i segundos, $fileSize bytes)" Green -Subsection
-
-						# Validar XML
-						try {
-							[xml]$xmlDoc = $content
-
-							if ($null -eq $xmlDoc.gpuz_dump -or $null -eq $xmlDoc.gpuz_dump.card) {
-								Log-Progress "# XML completo pero sin datos de GPU" Yellow -Subsection
-								continue
-							}
-
-							$valid = $false
-							foreach ($c in $xmlDoc.gpuz_dump.card) {
-								if (-not [string]::IsNullOrWhiteSpace($c.cardname)) {
-									$valid = $true
-									break
-								}
-							}
-							if (-not $valid) {
-								Log-Progress "# XML sin nombre de GPU valido" Yellow -Subsection
-								continue
-							}
-
-							$xmlReady = $true
-							Log-Progress "# XML VALIDO Y COMPLETO" Green -Subsection
-
-							# Cerrar GPU-Z limpiamente
-							if (-not $process.HasExited) {
-								Log-Progress "# Cerrando GPU-Z..." DarkGray -Subsection
-								$process.CloseMainWindow() | Out-Null
-								Start-Sleep -Milliseconds 500
-								if (-not $process.HasExited) { 
-									$process.Kill()
-									Start-Sleep -Milliseconds 300
-								}
-							}
-							break
-
-						} catch {
-							Log-Progress "# Error parseando XML completo: $($_.Exception.Message)" Red -Subsection
-						}
-					}
-					else {
-						# Aún no termina
-						if ($fileSize -eq $lastSize) {
-							$stableCount++
-							if ($stableCount -gt 5 -and $fileSize -gt 2048) {
-								Log-Progress "# Archivo estable pero sin cierre. Forzando lectura..." Yellow -Subsection
-								# Intentar parsear de todos modos
-								try {
-									if ($content -match '<cardname>' -and $content.Length -gt 1000) {
-										[xml]$xmlDoc = $content
-										if ($xmlDoc.gpuz_dump.card) {
-											$xmlReady = $true
-											Log-Progress "# XML parcial pero usable" Yellow -Subsection
-											if (-not $process.HasExited) { 
-												$process.Kill()
-												Start-Sleep -Milliseconds 300
-											}
-											break
-										}
-									}
-								} catch {
-									Log-Progress "# Error parseando XML parcial: $($_.Exception.Message)" Red -Subsection
-								}
-							}
-						} else {
-							$stableCount = 0
-							$lastSize = $fileSize
-						}
-
-						if ($i % 5 -eq 0) {
-							Log-Progress "# GPU-Z escribiendo... ($fileSize bytes, esperando </gpuz_dump>)" DarkGray -Subsection
-						}
-					}
-				} catch {
-					if ($i % 5 -eq 0) {
-						Log-Progress "# Leyendo archivo... ($i segundos)" DarkGray -Subsection
-					}
-				}
-			}
-
-			# === SI NO SE PUDO LEER EL XML ===
-			if (-not $xmlReady) {
-				if (-not $process.HasExited) {
-					$process.Kill()
-					Start-Sleep -Milliseconds 300
-				}
-				$script:gpuzInfo = "Error: No se pudo generar XML valido de GPU-Z"
-				Log-Progress "$script:gpuzInfo" Red -Error
-				return
-			}
-		}
-
+        # === PROCESAMIENTO PRINCIPAL ===
         Log-Progress "# PROCESANDO INFORMACION DE GPU..." Yellow -Subsection
 
-        # === LEER XML ===
+        $script:gpuzInfo = @()
+        $hasUsefulData = $false
+
         try {
-            [xml]$xml = Get-Content $xmlPath -Raw
+            [xml]$xml = Get-Content $xmlPath -Raw -ErrorAction Stop
+            Log-Progress "DEBUG: XML parseado correctamente (tamaño: $((Get-Content $xmlPath -Raw -ErrorAction SilentlyContinue).Length) bytes)" Magenta -Subsection
+
             $cards = $xml.gpuz_dump.card
+            Log-Progress "DEBUG: Cards encontradas en XML: $($cards.Count)" Magenta -Subsection
 
-            # CLASIFICAR TODAS LAS GPUs
-            $filteredCards = @()
-            foreach ($card in $cards) {
-                $gpuType = Get-GPUType -gpuName $card.cardname
-                $filteredCards += [PSCustomObject]@{
-                    Card = $card
-                    Type = $gpuType.Type
-                    DisplayName = $gpuType.DisplayName
-                    ShowDetails = $gpuType.ShowDetails
-                }
-            }
+            if ($cards -and $cards.Count -gt 0) {
+                $hasUsefulData = $true
 
-            $script:gpuzInfo = @()
-            foreach ($filteredCard in $filteredCards) {
-                $card = $filteredCard.Card
-                $name = $filteredCard.DisplayName
-
-                # Linea 1: Nombre de la GPU
-                $nameColor = if ($filteredCard.Type -eq "iGPU") { "Yellow" } else { "White" }
-                $script:gpuzInfo += [PSCustomObject]@{
-                    Line = $name
-                    Color = $nameColor
+                # CLASIFICAR TODAS LAS GPUs
+                $filteredCards = @()
+                foreach ($card in $cards) {
+                    $gpuType = Get-GPUType -gpuName $card.cardname
+                    $filteredCards += [PSCustomObject]@{
+                        Card = $card
+                        Type = $gpuType.Type
+                        DisplayName = $gpuType.DisplayName
+                        ShowDetails = $gpuType.ShowDetails
+                    }
                 }
 
-                # Solo mostrar ReBAR y PCIe para GPUs dedicadas
-                if ($filteredCard.ShowDetails) {
-                    # Linea 2: Estado ReBAR
-                    $rebar = if ($card.resizablebar -eq "Enabled") { "Activado" } else { "Desactivado" }
-                    $rebarColor = if ($card.resizablebar -eq "Enabled") { "Green" } else { "Red" }
+                foreach ($filteredCard in $filteredCards) {
+                    $card = $filteredCard.Card
+                    $name = $filteredCard.DisplayName
+                    $nameColor = if ($filteredCard.Type -eq "iGPU") { "Yellow" } else { "White" }
                     $script:gpuzInfo += [PSCustomObject]@{
-                        Line = "ReBAR: $rebar"
-                        Color = $rebarColor
+                        Line = $name
+                        Color = $nameColor
                     }
 
-                    # Linea 3: Conexión PCIe (solo "actual")
-                    $maxMatch = [regex]::Match($card.businterface, "x(\d+)\s+([\d\.]+)")
-                    $recWidth = if ($maxMatch.Success) { "x$($maxMatch.Groups[1].Value)" } else { "x?" }
-                    $recGenRaw = if ($maxMatch.Success) { [double]$maxMatch.Groups[2].Value } else { 0 }
-                    $recGen = if ($recGenRaw -gt 0) { "Gen$([math]::Floor($recGenRaw))" } else { "Gen?" }
-
-                    $curMatch = [regex]::Match($card.businterface, "@\s*x(\d+)\s+([\d\.]+)")
-                    $curWidth = if ($curMatch.Success) { "x$($curMatch.Groups[1].Value)" } else { "x?" }
-                    $curGenRaw = if ($curMatch.Success) { [double]$curMatch.Groups[2].Value } else { 0 }
-                    $curGen = if ($curGenRaw -gt 0) { "Gen$([math]::Floor($curGenRaw))" } else { "Gen?" }
-
-                    # Fallback: usar pcie_current si businterface no tiene @
-                    if (-not $curMatch.Success -and $card.pcie_current) {
-                        if ($card.pcie_current -match "x\s*(\d+)\s*@?\s*Gen\s*([\d\.]+)") {
-                            $curWidth = "x$($matches[1])"
-                            $curGenRaw = [double]$matches[2]
-                            $curGen = "Gen$([math]::Floor($curGenRaw))"
-                        } elseif ($card.pcie_current -match "Gen\s*([\d\.]+)\s*x\s*(\d+)") {
-                            $curGenRaw = [double]$matches[1]
-                            $curWidth = "x$($matches[2])"
-                            $curGen = "Gen$([math]::Floor($curGenRaw))"
+                    if ($filteredCard.ShowDetails) {
+                        # ReBAR
+                        $rebar = if ($card.resizablebar -eq "Enabled") { "Activado" } else { "Desactivado" }
+                        $rebarColor = if ($card.resizablebar -eq "Enabled") { "Green" } else { "Red" }
+                        $script:gpuzInfo += [PSCustomObject]@{
+                            Line = "ReBAR: $rebar"
+                            Color = $rebarColor
                         }
-                    }
-                    if (-not $curMatch.Success -and $card.pcie_current -match "Gen\s*([\d\.]+)") {
-                        $curGen = "Gen$([math]::Floor([double]$matches[1]))"
-                    }
 
-                    $actual = "PCIe $curWidth $curGen"
-                    $currentWidth = ($curWidth -replace 'x','' -as [int])
-                    $optimalWidth = ($recWidth -replace 'x','' -as [int])
-                    $currentGen = $curGenRaw
-                    $optimalGen = $recGenRaw
+                        # PCIe
+                        $maxMatch = [regex]::Match($card.businterface, "x(\d+)\s+([\d\.]+)")
+                        $recWidth = if ($maxMatch.Success) { "x$($maxMatch.Groups[1].Value)" } else { "x?" }
+                        $recGenRaw = if ($maxMatch.Success) { [double]$maxMatch.Groups[2].Value } else { 0 }
+                        $recGen = if ($recGenRaw -gt 0) { "Gen$([math]::Floor($recGenRaw))" } else { "Gen?" }
 
-                    # Detectar si está en modo ahorro de energía (Gen <= 1.1)
-                    $currentGenNum = if ($curGen -match "Gen([\d\.]+)") { [double]$matches[1] } else { 0 }
-                    $isIdlePowerSaving = ($currentGenNum -le 1.1 -and $currentGenNum -gt 0)
+                        $curMatch = [regex]::Match($card.businterface, "@\s*x(\d+)\s+([\d\.]+)")
+                        $curWidth = if ($curMatch.Success) { "x$($curMatch.Groups[1].Value)" } else { "x?" }
+                        $curGenRaw = if ($curMatch.Success) { [double]$curMatch.Groups[2].Value } else { 0 }
+                        $curGen = if ($curGenRaw -gt 0) { "Gen$([math]::Floor($curGenRaw))" } else { "Gen?" }
 
-                    # Añadir comparación Gen si no es OK y no es idle
-                    if (-not ($currentGen -eq $optimalGen) -and -not $isIdlePowerSaving) {
-                        $actual += " [Gen$currentGen vs Gen$optimalGen]"
-                    }
+                        if (-not $curMatch.Success -and $card.pcie_current) {
+                            if ($card.pcie_current -match "x\s*(\d+)\s*@?\s*Gen\s*([\d\.]+)") {
+                                $curWidth = "x$($matches[1])"
+                                $curGenRaw = [double]$matches[2]
+                                $curGen = "Gen$([math]::Floor($curGenRaw))"
+                            } elseif ($card.pcie_current -match "Gen\s*([\d\.]+)\s*x\s*(\d+)") {
+                                $curGenRaw = [double]$matches[1]
+                                $curWidth = "x$($matches[2])"
+                                $curGen = "Gen$([math]::Floor($curGenRaw))"
+                            }
+                        }
+                        if (-not $curMatch.Success -and $card.pcie_current -match "Gen\s*([\d\.]+)") {
+                            $curGen = "Gen$([math]::Floor([double]$matches[1]))"
+                        }
 
-                    # Contar SOLO dGPUs
-                    $dGPUCount = ($filteredCards | Where-Object { $_.ShowDetails -eq $true }).Count
-                    $isMultiGPU = $dGPUCount -gt 1
+                        $actual = "PCIe $curWidth $curGen"
+                        $currentWidth = ($curWidth -replace 'x','' -as [int])
+                        $optimalWidth = ($recWidth -replace 'x','' -as [int])
+                        $currentGen = $curGenRaw
+                        $optimalGen = $recGenRaw
 
-                    # Calcular ancho de banda
-                    $genMultipliers = @{"1.0"=1; "2.0"=2; "3.0"=4; "4.0"=8; "5.0"=16}
-                    $currentMultiplier = if ($genMultipliers.ContainsKey("$currentGen")) { $genMultipliers["$currentGen"] } else { 1 }
-                    $optimalMultiplier = if ($genMultipliers.ContainsKey("$optimalGen")) { $genMultipliers["$optimalGen"] } else { 1 }
-                    $currentBandwidth = $currentWidth * $currentMultiplier
-                    $optimalBandwidth = $optimalWidth * $optimalMultiplier
+                        $currentGenNum = if ($curGen -match "Gen([\d\.]+)") { [double]$matches[1] } else { 0 }
+                        $isIdlePowerSaving = ($currentGenNum -le 1.1 -and $currentGenNum -gt 0)
 
-                    # Definir OK antes de los if
-                    $widthOK = $currentWidth -eq $optimalWidth
-                    $genOK = $currentGen -eq $optimalGen
-                    $bandwidthOK = $currentBandwidth -ge ($optimalBandwidth * 0.5)
+                        if (-not ($currentGen -eq $optimalGen) -and -not $isIdlePowerSaving) {
+                            $actual += " [Gen$currentGen vs Gen$optimalGen]"
+                        }
 
-                    $reason = ""
-                    $pcieColor = "White"  # default, se sobreescribe
+                        $dGPUCount = ($filteredCards | Where-Object { $_.ShowDetails -eq $true }).Count
+                        $isMultiGPU = $dGPUCount -gt 1
 
-                    if ($isMultiGPU -and $optimalWidth -eq 16 -and $currentWidth -eq 8 -and $genOK) {
-                        $pcieColor = "Green"
-                        $reason = " (Multi-GPU: x8 normal)"
-                    } elseif ($widthOK -and $genOK) {
-                        $pcieColor = "Green"
-                    } elseif ($bandwidthOK -and $currentGen -ge $optimalGen) {
-                        $pcieColor = "Green"
-                    } elseif ($isIdlePowerSaving) {
-                        $pcieColor = "Yellow"
-                        $actual += " (modo ahorro energia)"
-                        $reason = " -> Ejecuta Render Test en GPU-Z o un juego para ver velocidad real (Gen$([math]::Floor($optimalGen)))"
-                    } else {
-                        $pcieColor = "Red"
-                        if ($currentWidth -lt $optimalWidth -and $genOK) {
-                            $reason = " (Ancho reducido: x$currentWidth vs x$optimalWidth)"
-                        } elseif ($currentGen -lt $optimalGen) {
-                            $reason = " (Gen inferior: Gen$currentGen vs Gen$optimalGen)"
-                        } elseif ($currentWidth -ne $optimalWidth) {
-                            $reason = " (Ancho incorrecto: x$currentWidth vs x$optimalWidth)"
+                        $genMultipliers = @{"1.0"=1; "2.0"=2; "3.0"=4; "4.0"=8; "5.0"=16}
+                        $currentMultiplier = if ($genMultipliers.ContainsKey("$currentGen")) { $genMultipliers["$currentGen"] } else { 1 }
+                        $optimalMultiplier = if ($genMultipliers.ContainsKey("$optimalGen")) { $genMultipliers["$optimalGen"] } else { 1 }
+                        $currentBandwidth = $currentWidth * $currentMultiplier
+                        $optimalBandwidth = $optimalWidth * $optimalMultiplier
+
+                        $widthOK = $currentWidth -eq $optimalWidth
+                        $genOK = $currentGen -eq $optimalGen
+                        $bandwidthOK = $currentBandwidth -ge ($optimalBandwidth * 0.5)
+
+                        $reason = ""
+                        $pcieColor = "White"
+
+                        if ($isMultiGPU -and $optimalWidth -eq 16 -and $currentWidth -eq 8 -and $genOK) {
+                            $pcieColor = "Green"
+                            $reason = " (Multi-GPU: x8 normal)"
+                        } elseif ($widthOK -and $genOK) {
+                            $pcieColor = "Green"
+                        } elseif ($bandwidthOK -and $currentGen -ge $optimalGen) {
+                            $pcieColor = "Green"
+                        } elseif ($isIdlePowerSaving) {
+                            $pcieColor = "Yellow"
+                            $actual += " (modo ahorro energia)"
+                            $reason = " -> Ejecuta Render Test en GPU-Z o un juego para ver velocidad real (Gen$([math]::Floor($optimalGen)))"
                         } else {
-                            $reason = " (Baja ancho de banda)"
+                            $pcieColor = "Red"
+                            if ($currentWidth -lt $optimalWidth -and $genOK) {
+                                $reason = " (Ancho reducido: x$currentWidth vs x$optimalWidth)"
+                            } elseif ($currentGen -lt $optimalGen) {
+                                $reason = " (Gen inferior: Gen$currentGen vs Gen$optimalGen)"
+                            } elseif ($currentWidth -ne $optimalWidth) {
+                                $reason = " (Ancho incorrecto: x$currentWidth vs x$optimalWidth)"
+                            } else {
+                                $reason = " (Baja ancho de banda)"
+                            }
+                        }
+
+                        $script:gpuzInfo += [PSCustomObject]@{
+                            Line = "Conexion actual: $actual$reason"
+                            Color = $pcieColor
                         }
                     }
 
                     $script:gpuzInfo += [PSCustomObject]@{
-                        Line = "Conexion actual: $actual$reason"
-                        Color = $pcieColor
+                        Line = ""
+                        Color = "White"
                     }
                 }
-                # Linea vacia entre GPUs
-                $script:gpuzInfo += [PSCustomObject]@{
-                    Line = ""
-                    Color = "White"
+
+                if ($script:gpuzInfo.Count -gt 0 -and $script:gpuzInfo[-1].Line -eq "") {
+                    $script:gpuzInfo = $script:gpuzInfo[0..($script:gpuzInfo.Count-2)]
                 }
-            }
-            # Remover última linea vacia
-            if ($script:gpuzInfo.Count -gt 0 -and $script:gpuzInfo[-1].Line -eq "") {
-                $script:gpuzInfo = $script:gpuzInfo[0..($script:gpuzInfo.Count-2)]
-            }
-			
-			# === EXTRAER SOLO LA VRAM REAL DEL XML DE GPU-Z (solo los GB) ===
-			$script:gpuVramInfo = @()
-			foreach ($filteredCard in $filteredCards) {
-				$card = $filteredCard.Card
-				$vramMB = $card.memsize -replace "[^0-9]", ""   # "16384" → 16384
-				$vramGB = if ($vramMB) { [math]::Round([int64]$vramMB / 1024, 0) } else { "??" }
-				$script:gpuVramInfo += "$vramGB GB"
-			}
-			$script:gpuVramInfo = $script:gpuVramInfo -join "`n"
-			if (-not $script:gpuVramInfo) { $script:gpuVramInfo = "No detectada" }
-			
-			# === CONSEJO REBAR MEJORADO ===
-			$script:rebarYoutube = $null
-			$rebarOff = $script:gpuzInfo | Where-Object { $_.Line -match "ReBAR: Desactivado" }
-			if ($rebarOff -and $script:motherboard -and $script:motherboard -notmatch "Desconocido|No disponible") {
-				$cleanName = Clean-MotherboardName -Name $script:motherboard
-				$script:rebarYoutube = "$cleanName enable Resizable BAR"
-			}
-            # === FINAL GPU-Z ===
-            Log-Progress "# ----------------------------------------------------" Gray -Subsection
-            Log-Progress "# GPU-Z: INFORMACION LEIDA CORRECTAMENTE" Green -Subsection
-            Log-Progress "# ----------------------------------------------------" Gray -Subsection
 
-			# === MOSTRAR GPUs DETECTADAS AQUi ===
-			Log-Progress "# GPUs DETECTADAS (GPU-Z)" Cyan -Subsection
-			Log-Progress "# -------------------------------------------------------------------" Gray -Subsection
-			foreach ($info in $script:gpuzInfo) {
-				if ($info.Line.Trim() -ne "" -and $info.Line -notmatch "ReBAR:|Conexion actual:") {
-					if ($info.Line -match "^(AMD|NVIDIA|Intel|GeForce|Radeon|Arc)") {
-						Log-Progress "# $($info.Line.Trim())" White -Subsection
-					}
-				}
-			}
-			Log-Progress "# -------------------------------------------------------------------" Gray -Subsection
+                # === EXTRAER VRAM ===
+                $script:gpuVramInfo = @()
+                foreach ($filteredCard in $filteredCards) {
+                    $card = $filteredCard.Card
+                    $vramMB = $card.memsize -replace "[^0-9]", ""
+                    $vramGB = if ($vramMB) { [math]::Round([int64]$vramMB / 1024, 0) } else { "??" }
+                    $script:gpuVramInfo += "$vramGB GB"
+                }
+                $script:gpuVramInfo = $script:gpuVramInfo -join "`n"
+                if (-not $script:gpuVramInfo) { $script:gpuVramInfo = "No detectada" }
 
+                # === CONSEJO REBAR ===
+                $script:rebarYoutube = $null
+                $rebarOff = $script:gpuzInfo | Where-Object { $_.Line -match "ReBAR: Desactivado" }
+                if ($rebarOff -and $script:motherboard -and $script:motherboard -notmatch "Desconocido|No disponible") {
+                    $cleanName = Clean-MotherboardName -Name $script:motherboard
+                    $script:rebarYoutube = "$cleanName enable Resizable BAR"
+                }
+
+                Log-Progress "# ----------------------------------------------------" Gray -Subsection
+                Log-Progress "# GPU-Z: INFORMACION LEIDA CORRECTAMENTE" Green -Subsection
+                Log-Progress "# ----------------------------------------------------" Gray -Subsection
+
+                Log-Progress "# GPUs DETECTADAS (GPU-Z)" Cyan -Subsection
+                Log-Progress "# -------------------------------------------------------------------" Gray -Subsection
+                foreach ($info in $script:gpuzInfo) {
+                    if ($info.Line.Trim() -ne "" -and $info.Line -notmatch "ReBAR:|Conexion actual:") {
+                        if ($info.Line -match "^(AMD|NVIDIA|Intel|GeForce|Radeon|Arc)") {
+                            Log-Progress "# $($info.Line.Trim())" White -Subsection
+                        }
+                    }
+                }
+                Log-Progress "# -------------------------------------------------------------------" Gray -Subsection
+            } else {
+                Log-Progress "DEBUG: XML parseado pero sin tarjetas GPU válidas" Yellow -Subsection
+            }
         } catch {
             $script:gpuzInfo = "Error procesando XML de GPU-Z: $($_.Exception.Message)"
             Log-Progress "$script:gpuzInfo" Red -Error
         }
 
-	} catch {
-            $script:gpuzInfo = "Error GPU-Z: $($_.Exception.Message)"
-            Log-Progress "$script:gpuzInfo" Red -Error
+        # === CHEQUEO FINAL + FALLBACK (se ejecuta SIEMPRE) ===
+        Log-Progress "DEBUG: Estado final antes de fallback → gpuzInfo.Count = $($script:gpuzInfo.Count)" Magenta -Subsection
 
-            # === FALLBACK HÍBRIDO SI GPU-Z FALLÓ O NO DETECTÓ NADA ===
-            if (-not $script:gpuzInfo -or $script:gpuzInfo.Count -eq 0 -or 
-                ($script:gpuzInfo | Where-Object { $_.Line.Trim() -ne "" -and -not $_.Line.Contains("Error") }).Count -eq 0) 
-            {
-                $script:gpuzInfo = @()
-                $seenNames = @()
+        $hasUsefulData = $false
+        if ($script:gpuzInfo -and $script:gpuzInfo.Count -gt 0) {
+            $useful = $script:gpuzInfo | Where-Object {
+                $_.Line.Trim() -ne "" -and
+                $_.Line -notmatch '(?i)error|no se pudo|timeout|falló|procesando'
+            }
+            $hasUsefulData = $useful.Count -gt 0
+            Log-Progress "DEBUG: Líneas útiles encontradas: $($useful.Count)" Magenta -Subsection
+        }
 
-                # 1. NVIDIA vía nvidia-smi
-                Get-NvidiaFallbackInfo -seenNames ([ref]$seenNames)
+        if (-not $hasUsefulData) {
+            Log-Progress "GPU-Z no proporcionó datos útiles → activando fallback híbrido" Yellow -Subsection
 
-                # 2. WMI para el resto (evita duplicados)
-                Get-WmiFallbackGPUs -seenNames ([ref]$seenNames)
+            $script:gpuzInfo = @()
+            $seenNames = @()
 
-                # Si todavía no hay nada → mensaje genérico
-                if ($script:gpuzInfo.Count -eq 0) {
-                    $script:gpuzInfo += [PSCustomObject]@{
-                        Line  = "No se detectaron GPUs dedicadas"
-                        Color = "Yellow"
-                    }
+            Get-NvidiaFallbackInfo -seenNames ([ref]$seenNames)
+            Get-WmiFallbackGPUs -seenNames ([ref]$seenNames)
+
+            if ($script:gpuzInfo.Count -eq 0) {
+                $script:gpuzInfo += [PSCustomObject]@{
+                    Line  = "No se detectaron GPUs dedicadas"
+                    Color = "Yellow"
                 }
             }
-    } finally {
-        # Limpieza final - asegurarse de que GPU-Z este cerrado
+        } else {
+            Log-Progress "DEBUG: Datos útiles detectados → no se necesita fallback" Cyan -Subsection
+        }
+
+        # === Limpieza final ===
         try {
             $processes = Get-Process -Name "GPU-Z*" -ErrorAction SilentlyContinue
             foreach ($proc in $processes) {
@@ -916,6 +898,9 @@ function Update-GPUZInfo {
         } catch {
             # Ignorar errores en limpieza
         }
+    } catch {
+        $script:gpuzInfo = "Error GPU-Z general: $($_.Exception.Message)"
+        Log-Progress "$script:gpuzInfo" Red -Error
     }
 }
 
