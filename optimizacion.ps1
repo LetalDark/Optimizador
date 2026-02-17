@@ -879,8 +879,44 @@ function Update-GPUZInfo {
         }
 
     } catch {
-        $script:gpuzInfo = "Error GPU-Z: $($_.Exception.Message)"
-        Log-Progress "$script:gpuzInfo" Red -Error
+		$script:gpuzInfo = "Error GPU-Z: $($_.Exception.Message)"
+				Log-Progress "$script:gpuzInfo" Red -Error
+
+				# === FALLBACK HÍBRIDO SI GPU-Z FALLÓ O NO DETECTÓ NADA ===
+				if (-not $script:gpuzInfo -or $script:gpuzInfo.Count -eq 0 -or ($script:gpuzInfo | Where-Object { $_.Line.Trim() -ne "" -and -not $_.Line.Contains("Error") }).Count -eq 0) {
+					$script:gpuzInfo = @()
+					$seenNames = @()
+
+					# 1. Intentar nvidia-smi para NVIDIA (VRAM precisa)
+					try {
+						$nvidiaOutput = nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>$null
+						if ($nvidiaOutput) {
+							$parts = $nvidiaOutput.Split(',')
+							$nvidiaName = $parts[0].Trim()
+							$vramMB = $parts[1].Trim()
+							$vramGB = [math]::Round($vramMB / 1024, 0)
+							$script:gpuzInfo += [PSCustomObject]@{ Line = "$nvidiaName - VRAM: $vramGB GB"; Color = "Yellow" }
+							$script:gpuzInfo += [PSCustomObject]@{ Line = " (Fallback nvidia-smi - VRAM precisa)"; Color = "Gray" }
+							$script:gpuzInfo += [PSCustomObject]@{ Line = ""; Color = "White" }
+							$seenNames += $nvidiaName
+						}
+					} catch {}
+
+					# 2. Fallback WMI para GPUs restantes (solo nombre, evita duplicados)
+					try {
+						Get-CimInstance Win32_VideoController | Where-Object {
+							$_.Name -match "NVIDIA|AMD|Radeon|GeForce|RTX|RX" -and $_.Name -notin $seenNames
+						} | Sort-Object Name | ForEach-Object {
+							$script:gpuzInfo += [PSCustomObject]@{ Line = $_.Name; Color = "Yellow" }
+							$script:gpuzInfo += [PSCustomObject]@{ Line = " (Fallback WMI - nombre solo)"; Color = "Gray" }
+							$script:gpuzInfo += [PSCustomObject]@{ Line = ""; Color = "White" }
+						}
+					} catch {}
+
+					if ($script:gpuzInfo.Count -eq 0) {
+						$script:gpuzInfo += [PSCustomObject]@{ Line = "No se detectaron GPUs dedicadas"; Color = "Yellow" }
+					}
+				}
     } finally {
         # Limpieza final - asegurarse de que GPU-Z este cerrado
         try {
@@ -2392,30 +2428,16 @@ function Show-Menu {
 	Write-Host " $script:cpuName" -ForegroundColor White
 
 	Write-Host "INFO GPU (GPU-Z):" -ForegroundColor Cyan
-	if ($script:gpuzInfo -and ($script:gpuzInfo | Where-Object { $_.Line -and $_.Line.Trim() -ne "" }).Count -gt 0) {
-		$vramLines = $script:gpuVramInfo -split "`n"
-		$vramIndex = 0
+	if ($script:gpuzInfo) {
 		foreach ($info in $script:gpuzInfo) {
-			# Saltar si es null o no tiene Line
 			if (-not $info -or -not $info.Line) { continue }
-
 			$line = $info.Line.Trim()
 			if ($line -ne "") {
-				# Solo en la línea del nombre de GPU: formatear VRAM
-				if ($line -match "^(NVIDIA|AMD|GeForce|Radeon|RTX|RX|Intel|Arc)") {
-					if ($vramIndex -lt $vramLines.Count) {
-						$vram = $vramLines[$vramIndex].Trim()
-						$line = $line -replace "\s+\d+ GB$", ""   # limpia VRAM vieja si había
-						$line = $line.TrimEnd()
-						$line = "$line - VRAM: $vram"
-					}
-					$vramIndex++
-				}
 				Write-Host " $line" -ForegroundColor $info.Color
 			}
 		}
 	} else {
-		Write-Host " No se detectaron GPUs (GPU-Z falló o no hay datos)" -ForegroundColor Yellow
+		Write-Host "   No se detectaron GPUs" -ForegroundColor Yellow
 	}
 	Show-RebarWarning
 
